@@ -1,0 +1,32 @@
+version: "v5"
+seed: 42
+n_splits: 5
+model_type: "LightGBM"
+features_summary: "v4 피처 + 푄현상(높새바람) 지수 + 열돔/대기정체 지수 + 시계열 Ramp(Diff/Rolling) 변동성"
+notes: "v5: 태백 특수 기상 현상(푄/열돔) 및 시계열 바람 변동성 반영"
+
+data_paths:
+  train_dir: "./train"
+  test_dir: "./test"
+  info_path: "./info.xlsx"
+  save_model_dir: "./saved_models/v5"
+  submission_dir: "./submissions"
+
+targets:
+  - "kpx_group_1"
+  - "kpx_group_2"
+  - "kpx_group_3"
+
+capacity_kwh:
+  kpx_group_1: 21600
+  kpx_group_2: 21600
+  kpx_group_3: 21000
+
+model_params:
+  n_estimators: 1200
+  learning_rate: 0.03
+  max_depth: 8
+  num_leaves: 31
+  min_child_samples: 20
+  verbosity: -1
+  random_state: 42

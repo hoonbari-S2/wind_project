@@ -16,7 +16,7 @@ from src.features import process_calendar_features, add_wind_features
 from src.logger import log_experiment
 
 # 1. Config 로드
-with open("./configs/config_v4.yaml", "r", encoding="utf-8") as f:
+with open("./configs/config_v5.yaml", "r", encoding="utf-8") as f:
     config = yaml.safe_load(f)
 
 seed_everything(config["seed"])

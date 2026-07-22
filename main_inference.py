@@ -6,7 +6,7 @@ from pathlib import Path
 from src.features import process_calendar_features, add_wind_features
 
 # 1. Config 로드
-with open("./configs/config_v4.yaml", "r", encoding="utf-8") as f:
+with open("./configs/config_v5.yaml", "r", encoding="utf-8") as f:
     config = yaml.safe_load(f)
 
 model_dir = Path(config["data_paths"]["save_model_dir"])
