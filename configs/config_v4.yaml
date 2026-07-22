@@ -1,0 +1,32 @@
+version: "v4"
+seed: 42
+n_splits: 5
+model_type: "LightGBM"
+features_summary: "격자별 Pivot 피처 + GFS/LDAPS 117m 멱법칙 보정 풍속 + 풍향 sin/cos 변환(360도와 1도의 경계 불연속 문제 해결) + SimpleImputer 제거(LightGBM 결측치 자체학습)"
+notes: "v4: 공간 피처 확장, 117m 허브고도 보정, 무한대(inf) -> nan 변환 적용"
+
+data_paths:
+  train_dir: "./train"
+  test_dir: "./test"
+  info_path: "./info.xlsx"
+  save_model_dir: "./saved_models/v4"
+  submission_dir: "./submissions"
+
+targets:
+  - "kpx_group_1"
+  - "kpx_group_2"
+  - "kpx_group_3"
+
+capacity_kwh:
+  kpx_group_1: 21600
+  kpx_group_2: 21600
+  kpx_group_3: 21000
+
+model_params:
+  n_estimators: 1200
+  learning_rate: 0.03
+  max_depth: 8
+  num_leaves: 31
+  min_child_samples: 20
+  verbosity: -1
+  random_state: 42

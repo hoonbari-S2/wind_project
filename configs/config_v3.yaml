@@ -1,0 +1,32 @@
+version: "v3"
+seed: 42
+n_splits: 5
+model_type: "LightGBM"
+features_summary: "5-Fold CV 도입 / 달력 피처 + GFS (80m/100m) 합성 풍속, v^3, 풍향"
+notes: "K-Fold 교차 검증 적용으로 오버피팅 없는 OOF 점수 산출"
+
+data_paths:
+  train_dir: "./train"
+  test_dir: "./test"
+  info_path: "./information/info.xlsx"
+  save_model_dir: "./saved_models/v3"
+  submission_dir: "./submissions"
+
+targets:
+  - "kpx_group_1"
+  - "kpx_group_2"
+  - "kpx_group_3"
+
+capacity_kwh:
+  kpx_group_1: 21600
+  kpx_group_2: 21600
+  kpx_group_3: 21000
+
+model_params:
+  n_estimators: 1000
+  learning_rate: 0.03
+  max_depth: 8
+  num_leaves: 31
+  min_child_samples: 20
+  verbosity: -1
+  random_state: 42
