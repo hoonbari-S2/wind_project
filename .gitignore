@@ -1,0 +1,8 @@
+# 데이터 폴더 전체 제외
+train/
+test/
+*.csv
+
+# 저장된 모델 및 피클 파일 제외
+saved_models/
+*.pkl

@@ -1,0 +1,29 @@
+version: "v1"
+seed: 42
+model_type: "RandomForest"
+features_summary: "기본 달력 피처 + GFS 80m 합성 풍속"
+notes: "베이스라인 모듈화 및 로거 연동 테스트"
+
+data_paths:
+  train_dir: "./train"
+  test_dir: "./test"
+  info_path: "./information/info.xlsx"
+  save_model_dir: "./saved_models/v1"
+  submission_dir: "./submissions"
+
+targets:
+  - "kpx_group_1"
+  - "kpx_group_2"
+  - "kpx_group_3"
+
+capacity_kwh:
+  kpx_group_1: 21600
+  kpx_group_2: 21600
+  kpx_group_3: 21000
+
+model_params:
+  n_estimators: 150
+  max_depth: 12
+  min_samples_leaf: 8
+  random_state: 42
+  n_jobs: -1

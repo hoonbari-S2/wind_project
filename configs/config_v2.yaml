@@ -1,0 +1,31 @@
+version: "v2"
+seed: 42
+model_type: "LightGBM"
+features_summary: "달력 피처 + GFS (80m/100m) 합성 풍속 및 v^3 + GFS (80m/100m) 풍향"
+notes: "LightGBM 교체 / 100m 고도 바람 변수 및 풍향(Wind Direction) 피처 추가"
+
+data_paths:
+  train_dir: "./train"
+  test_dir: "./test"
+  info_path: "./information/info.xlsx"
+  save_model_dir: "./saved_models/v2"
+  submission_dir: "./submissions"
+
+targets:
+  - "kpx_group_1"
+  - "kpx_group_2"
+  - "kpx_group_3"
+
+capacity_kwh:
+  kpx_group_1: 21600
+  kpx_group_2: 21600
+  kpx_group_3: 21000
+
+model_params:
+  n_estimators: 1000
+  learning_rate: 0.03
+  max_depth: 8
+  num_leaves: 31
+  min_child_samples: 20
+  verbosity: -1 
+  random_state: 42
