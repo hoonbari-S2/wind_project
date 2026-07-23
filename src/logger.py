@@ -18,9 +18,9 @@ def log_experiment(
     log_data = {
         "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "Version": config.get("version", "unknown"),
-        "Total Score": round(total_score, 4),
-        "1 - NMAE": round(one_minus_nmae, 4),
-        "FICR": round(ficr, 4),
+        "Val_Total Score": round(total_score, 4),
+        "Val_1 - NMAE": round(one_minus_nmae, 4),
+        "Val_FICR": round(ficr, 4),
         "Model": config.get("model_type", "RandomForest"),
         "Seed": config.get("seed", 42),
         "Features": features_summary,

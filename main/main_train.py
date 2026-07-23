@@ -30,7 +30,6 @@ ldaps_train = pd.read_csv(train_dir / "ldaps_train.csv", encoding="utf-8-sig")
 gfs_train = pd.read_csv(train_dir / "gfs_train.csv", encoding="utf-8-sig")
 
 def process_weather_data(df, prefix):
-    """ [v4] 단순 평균 제거: Grid ID별 Pivot 피처 + 전체 Grid Mean 피처 동시 활용 """
     df = df.copy()
     df["forecast_kst_dtm"] = pd.to_datetime(df["forecast_kst_dtm"])
     drop_cols = {"data_available_kst_dtm", "latitude", "longitude"}

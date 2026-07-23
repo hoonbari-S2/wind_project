@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta http-equiv="content-type" content="text/html; charset=UTF-8" />
+    <title>pydeck</title>
+        <script src="https://api.tiles.mapbox.com/mapbox-gl-js/v1.13.0/mapbox-gl.js"></script>
+        <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.2.0/css/bootstrap-theme.min.css" />
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/font-awesome/4.6.3/css/font-awesome.min.css" />
+    <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.14.0/dist/maplibre-gl.css" />
+    <script src='https://cdn.jsdelivr.net/npm/@deck.gl/jupyter-widget@~9.2.*/dist/index.js'></script>
+    <link rel="stylesheet" href=https://cdn.jsdelivr.net/npm/@deck.gl/widgets@~9.2.*/dist/stylesheet.css />
+    <style>
+    body {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+#deck-container {
+  width: 100vw;
+  height: 100vh;
+}
+
+#deck-container canvas {
+  z-index: 1;
+  background: none;
+}
+
+#deck-container .error_text {
+  color: red;
+  background: none;
+  position: absolute;
+  z-index: 100;
+}
+    </style>
+  </head>
+  <body>
+    <div id="deck-container">
+    </div>
+  </body>
+  <script>
+    const container = document.getElementById('deck-container');
+    const jsonInput = {
+  "initialViewState": {
+    "bearing": 25,
+    "latitude": 37.28189901960784,
+    "longitude": 128.96236683006535,
+    "pitch": 55,
+    "zoom": 12.2
+  },
+  "layers": [
+    {
+      "@@type": "ColumnLayer",
+      "autoHighlight": true,
+      "data": [
+        {
+          "Hub Height(m)": 117,
+          "KPX\uadf8\ub8f9": 1,
+          "Rotor Diameter(m)": 126,
+          "color": [
+            230,
+            57,
+            70,
+            220
+          ],
+          "elevation": 432.0,
+          "latitude": 37.28211388888889,
+          "longitude": 128.95058333333333,
+          "\uadf8\ub8f9\uc124\ube44\uc6a9\ub7c9(MW)": 21.6,
+          "\ub2e8\uacc4": 1,
+          "\uba85\uce6d": "\ud0dc\ubc31\uac00\ub355\uc0b0",
+          "\ubaa8\ub378\uba85": "V126",
+          "\uc124\ube44\uc6a9\ub7c9(MW)": 3.6,
+          "\uc81c\uc791\uc0ac": "VESTAS",
+          "\uc88c\ud45c(Google)": "37\u00b016'55.61\"N 128\u00b057'02.10\"E",
+          "\ud638\uae30": 1
+        },
+        {
+          "Hub Height(m)": 117,
+          "KPX\uadf8\ub8f9": 1,
+          "Rotor Diameter(m)": 126,
+          "color": [
+            230,
+            57,
+            70,
+            220
+          ],
+          "elevation": 432.0,
+          "latitude": 37.28445833333333,
+          "longitude": 128.94954166666668,
+          "\uadf8\ub8f9\uc124\ube44\uc6a9\ub7c9(MW)": NaN,
+          "\ub2e8\uacc4": 1,
+          "\uba85\uce6d": "\ud0dc\ubc31\uac00\ub355\uc0b0",
+          "\ubaa8\ub378\uba85": "V126",
+          "\uc124\ube44\uc6a9\ub7c9(MW)": 3.6,
+          "\uc81c\uc791\uc0ac": "VESTAS",
+          "\uc88c\ud45c(Google)": "37\u00b017'04.05\"N 128\u00b056'58.35\"E",
+          "\ud638\uae30": 2
+        },
+        {
+          "Hub Height(m)": 117,
+          "KPX\uadf8\ub8f9": 1,
+          "Rotor Diameter(m)": 126,
+          "color": [
+            230,
+            57,
+            70,
+            220
+          ],
+          "elevation": 432.0,
+          "latitude": 37.286525,
+          "longitude": 128.94971944444444,
+          "\uadf8\ub8f9\uc124\ube44\uc6a9\ub7c9(MW)": NaN,
+          "\ub2e8\uacc4": 1,
+          "\uba85\uce6d": "\ud0dc\ubc31\uac00\ub355\uc0b0",
+          "\ubaa8\ub378\uba85": "V126",
+          "\uc124\ube44\uc6a9\ub7c9(MW)": 3.6,
+          "\uc81c\uc791\uc0ac": "VESTAS",
+          "\uc88c\ud45c(Google)": "37\u00b017'11.49\"N 128\u00b056'58.99\"E",
+          "\ud638\uae30": 3
+        },
+        {
+          "Hub Height(m)": 117,
+          "KPX\uadf8\ub8f9": 1,
+          "Rotor Diameter(m)": 126,
+          "color": [
+            230,
+            57,
+            70,
+            220
+          ],
+          "elevation": 432.0,
+          "latitude": 37.28975277777778,
+          "longitude": 128.9510222222222,
+          "\uadf8\ub8f9\uc124\ube44\uc6a9\ub7c9(MW)": NaN,
+          "\ub2e8\uacc4": 1,
+          "\uba85\uce6d": "\ud0dc\ubc31\uac00\ub355\uc0b0",
+          "\ubaa8\ub378\uba85": "V126",
+          "\uc124\ube44\uc6a9\ub7c9(MW)": 3.6,
+          "\uc81c\uc791\uc0ac": "VESTAS",
+          "\uc88c\ud45c(Google)": "37\u00b017'23.11\"N 128\u00b057'03.68\"E",
+          "\ud638\uae30": 4
+        },
+        {
+          "Hub Height(m)": 117,
+          "KPX\uadf8\ub8f9": 1,
+          "Rotor Diameter(m)": 126,
+          "color": [
+            230,
+            57,
+            70,
+            220
+          ],
+          "elevation": 432.0,
+          "latitude": 37.29116666666666,
+          "longitude": 128.95432777777776,
+          "\uadf8\ub8f9\uc124\ube44\uc6a9\ub7c9(MW)": NaN,
+          "\ub2e8\uacc4": 1,
+          "\uba85\uce6d": "\ud0dc\ubc31\uac00\ub355\uc0b0",
+          "\ubaa8\ub378\uba85": "V126",
+          "\uc124\ube44\uc6a9\ub7c9(MW)": 3.6,
+          "\uc81c\uc791\uc0ac": "VESTAS",
+          "\uc88c\ud45c(Google)": "37\u00b017'28.20\"N 128\u00b057'15.58\"E",
+          "\ud638\uae30": 5
+        },
+        {
+          "Hub Height(m)": 117,
+          "KPX\uadf8\ub8f9": 1,
+          "Rotor Diameter(m)": 126,
+          "color": [
+            230,
+            57,
+            70,
+            220
+          ],
+          "elevation": 432.0,
+          "latitude": 37.28874444444444,
+          "longitude": 128.95693333333332,
+          "\uadf8\ub8f9\uc124\ube44\uc6a9\ub7c9(MW)": NaN,
+          "\ub2e8\uacc4": 1,
+          "\uba85\uce6d": "\ud0dc\ubc31\uac00\ub355\uc0b0",
+          "\ubaa8\ub378\uba85": "V126",
+          "\uc124\ube44\uc6a9\ub7c9(MW)": 3.6,
+          "\uc81c\uc791\uc0ac": "VESTAS",
+          "\uc88c\ud45c(Google)": "37\u00b017'19.48\"N 128\u00b057'24.96\"E",
+          "\ud638\uae30": 6
+        },
+        {
+          "Hub Height(m)": 117,
+          "KPX\uadf8\ub8f9": 2,
+          "Rotor Diameter(m)": 126,
+          "color": [
+            69,
+            123,
+            157,
+            220
+          ],
+          "elevation": 432.0,
+          "latitude": 37.28783333333333,
+          "longitude": 128.95963055555555,
+          "\uadf8\ub8f9\uc124\ube44\uc6a9\ub7c9(MW)": 21.6,
+          "\ub2e8\uacc4": 1,
+          "\uba85\uce6d": "\ud0dc\ubc31\uac00\ub355\uc0b0",
+          "\ubaa8\ub378\uba85": "V126",
+          "\uc124\ube44\uc6a9\ub7c9(MW)": 3.6,
+          "\uc81c\uc791\uc0ac": "VESTAS",
+          "\uc88c\ud45c(Google)": "37\u00b017'16.20\"N 128\u00b057'34.67\"E",
+          "\ud638\uae30": 7
+        },
+        {
+          "Hub Height(m)": 117,
+          "KPX\uadf8\ub8f9": 2,
+          "Rotor Diameter(m)": 126,
+          "color": [
+            69,
+            123,
+            157,
+            220
+          ],
+          "elevation": 432.0,
+          "latitude": 37.28646944444444,
+          "longitude": 128.9631222222222,
+          "\uadf8\ub8f9\uc124\ube44\uc6a9\ub7c9(MW)": NaN,
+          "\ub2e8\uacc4": 1,
+          "\uba85\uce6d": "\ud0dc\ubc31\uac00\ub355\uc0b0",
+          "\ubaa8\ub378\uba85": "V126",
+          "\uc124\ube44\uc6a9\ub7c9(MW)": 3.6,
+          "\uc81c\uc791\uc0ac": "VESTAS",
+          "\uc88c\ud45c(Google)": "37\u00b017'11.29\"N 128\u00b057'47.24\"E",
+          "\ud638\uae30": 8
+        },
+        {
+          "Hub Height(m)": 117,
+          "KPX\uadf8\ub8f9": 2,
+          "Rotor Diameter(m)": 126,
+          "color": [
+            69,
+            123,
+            157,
+            220
+          ],
+          "elevation": 432.0,
+          "latitude": 37.28360277777777,
+          "longitude": 128.96595555555555,
+          "\uadf8\ub8f9\uc124\ube44\uc6a9\ub7c9(MW)": NaN,
+          "\ub2e8\uacc4": 1,
+          "\uba85\uce6d": "\ud0dc\ubc31\uac00\ub355\uc0b0",
+          "\ubaa8\ub378\uba85": "V126",
+          "\uc124\ube44\uc6a9\ub7c9(MW)": 3.6,
+          "\uc81c\uc791\uc0ac": "VESTAS",
+          "\uc88c\ud45c(Google)": "37\u00b017'00.97\"N 128\u00b057'57.44\"E",
+          "\ud638\uae30": 9
+        },
+        {
+          "Hub Height(m)": 117,
+          "KPX\uadf8\ub8f9": 2,
+          "Rotor Diameter(m)": 126,
+          "color": [
+            69,
+            123,
+            157,
+            220
+          ],
+          "elevation": 432.0,
+          "latitude": 37.281325,
+          "longitude": 128.96782777777779,
+          "\uadf8\ub8f9\uc124\ube44\uc6a9\ub7c9(MW)": NaN,
+          "\ub2e8\uacc4": 1,
+          "\uba85\uce6d": "\ud0dc\ubc31\uac00\ub355\uc0b0",
+          "\ubaa8\ub378\uba85": "V126",
+          "\uc124\ube44\uc6a9\ub7c9(MW)": 3.6,
+          "\uc81c\uc791\uc0ac": "VESTAS",
+          "\uc88c\ud45c(Google)": "37\u00b016'52.77\"N 128\u00b058'04.18\"E",
+          "\ud638\uae30": 10
+        },
+        {
+          "Hub Height(m)": 117,
+          "KPX\uadf8\ub8f9": 2,
+          "Rotor Diameter(m)": 126,
+          "color": [
+            69,
+            123,
+            157,
+            220
+          ],
+          "elevation": 432.0,
+          "latitude": 37.27913611111111,
+          "longitude": 128.96697777777777,
+          "\uadf8\ub8f9\uc124\ube44\uc6a9\ub7c9(MW)": NaN,
+          "\ub2e8\uacc4": 1,
+          "\uba85\uce6d": "\ud0dc\ubc31\uac00\ub355\uc0b0",
+          "\ubaa8\ub378\uba85": "V126",
+          "\uc124\ube44\uc6a9\ub7c9(MW)": 3.6,
+          "\uc81c\uc791\uc0ac": "VESTAS",
+          "\uc88c\ud45c(Google)": "37\u00b016'44.89\"N 128\u00b058'01.12\"E",
+          "\ud638\uae30": 11
+        },
+        {
+          "Hub Height(m)": 117,
+          "KPX\uadf8\ub8f9": 2,
+          "Rotor Diameter(m)": 126,
+          "color": [
+            69,
+            123,
+            157,
+            220
+          ],
+          "elevation": 432.0,
+          "latitude": 37.27516111111111,
+          "longitude": 128.96737222222222,
+          "\uadf8\ub8f9\uc124\ube44\uc6a9\ub7c9(MW)": NaN,
+          "\ub2e8\uacc4": 1,
+          "\uba85\uce6d": "\ud0dc\ubc31\uac00\ub355\uc0b0",
+          "\ubaa8\ub378\uba85": "V126",
+          "\uc124\ube44\uc6a9\ub7c9(MW)": 3.6,
+          "\uc81c\uc791\uc0ac": "VESTAS",
+          "\uc88c\ud45c(Google)": "37\u00b016'30.58\"N 128\u00b058'02.54\"E",
+          "\ud638\uae30": 12
+        },
+        {
+          "Hub Height(m)": 117,
+          "KPX\uadf8\ub8f9": 3,
+          "Rotor Diameter(m)": 136,
+          "color": [
+            42,
+            157,
+            143,
+            220
+          ],
+          "elevation": 504.0,
+          "latitude": 37.28325833333333,
+          "longitude": 128.96249166666666,
+          "\uadf8\ub8f9\uc124\ube44\uc6a9\ub7c9(MW)": 21.0,
+          "\ub2e8\uacc4": 2,
+          "\uba85\uce6d": "\ud0dc\ubc31\uac00\ub355\uc0b0",
+          "\ubaa8\ub378\uba85": "U136",
+          "\uc124\ube44\uc6a9\ub7c9(MW)": 4.2,
+          "\uc81c\uc791\uc0ac": "UNISON",
+          "\uc88c\ud45c(Google)": "37\u00b016'59.73\"N 128\u00b057'44.97\"E",
+          "\ud638\uae30": 1
+        },
+        {
+          "Hub Height(m)": 117,
+          "KPX\uadf8\ub8f9": 3,
+          "Rotor Diameter(m)": 136,
+          "color": [
+            42,
+            157,
+            143,
+            220
+          ],
+          "elevation": 504.0,
+          "latitude": 37.27789166666667,
+          "longitude": 128.97050000000002,
+          "\uadf8\ub8f9\uc124\ube44\uc6a9\ub7c9(MW)": NaN,
+          "\ub2e8\uacc4": 2,
+          "\uba85\uce6d": "\ud0dc\ubc31\uc6d0\ub3d9",
+          "\ubaa8\ub378\uba85": "U136",
+          "\uc124\ube44\uc6a9\ub7c9(MW)": 4.2,
+          "\uc81c\uc791\uc0ac": "UNISON",
+          "\uc88c\ud45c(Google)": "37\u00b016'40.41\"N 128\u00b058'13.80\"E",
+          "\ud638\uae30": 2
+        },
+        {
+          "Hub Height(m)": 117,
+          "KPX\uadf8\ub8f9": 3,
+          "Rotor Diameter(m)": 136,
+          "color": [
+            42,
+            157,
+            143,
+            220
+          ],
+          "elevation": 504.0,
+          "latitude": 37.274452777777775,
+          "longitude": 128.97292777777778,
+          "\uadf8\ub8f9\uc124\ube44\uc6a9\ub7c9(MW)": NaN,
+          "\ub2e8\uacc4": 2,
+          "\uba85\uce6d": "\ud0dc\ubc31\uc6d0\ub3d9",
+          "\ubaa8\ub378\uba85": "U136",
+          "\uc124\ube44\uc6a9\ub7c9(MW)": 4.2,
+          "\uc81c\uc791\uc0ac": "UNISON",
+          "\uc88c\ud45c(Google)": "37\u00b016'28.03\"N 128\u00b058'22.54\"E",
+          "\ud638\uae30": 3
+        },
+        {
+          "Hub Height(m)": 117,
+          "KPX\uadf8\ub8f9": 3,
+          "Rotor Diameter(m)": 136,
+          "color": [
+            42,
+            157,
+            143,
+            220
+          ],
+          "elevation": 504.0,
+          "latitude": 37.27182777777778,
+          "longitude": 128.974725,
+          "\uadf8\ub8f9\uc124\ube44\uc6a9\ub7c9(MW)": NaN,
+          "\ub2e8\uacc4": 2,
+          "\uba85\uce6d": "\ud0dc\ubc31\uc6d0\ub3d9",
+          "\ubaa8\ub378\uba85": "U136",
+          "\uc124\ube44\uc6a9\ub7c9(MW)": 4.2,
+          "\uc81c\uc791\uc0ac": "UNISON",
+          "\uc88c\ud45c(Google)": "37\u00b016'18.58\"N 128\u00b058'29.01\"E",
+          "\ud638\uae30": 4
+        },
+        {
+          "Hub Height(m)": 117,
+          "KPX\uadf8\ub8f9": 3,
+          "Rotor Diameter(m)": 136,
+          "color": [
+            42,
+            157,
+            143,
+            220
+          ],
+          "elevation": 504.0,
+          "latitude": 37.268563888888885,
+          "longitude": 128.97657777777778,
+          "\uadf8\ub8f9\uc124\ube44\uc6a9\ub7c9(MW)": NaN,
+          "\ub2e8\uacc4": 2,
+          "\uba85\uce6d": "\ud0dc\ubc31\uc6d0\ub3d9",
+          "\ubaa8\ub378\uba85": "U136",
+          "\uc124\ube44\uc6a9\ub7c9(MW)": 4.2,
+          "\uc81c\uc791\uc0ac": "UNISON",
+          "\uc88c\ud45c(Google)": "37\u00b016'06.83\"N 128\u00b058'35.68\"E",
+          "\ud638\uae30": 5
+        }
+      ],
+      "elevationScale": 1.5,
+      "getElevation": "@@=elevation",
+      "getFillColor": "@@=color",
+      "getPosition": "@@=[longitude, latitude]",
+      "id": "c3b5da55-7466-4ad0-9823-49ea787e2bfd",
+      "pickable": true,
+      "radius": 90
+    }
+  ],
+  "mapProvider": "carto",
+  "mapStyle": "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
+  "views": [
+    {
+      "@@type": "MapView",
+      "controller": true
+    }
+  ]
+};
+    const tooltip = {'text': '단지: {명칭}\n제작사/모델: {제작사} {모델명} ({호기}호기)\nKPX Group: {KPX그룹}\n위도/경도: [{latitude}, {longitude}]'};
+    const customLibraries = null;
+    const configuration = null;
+
+    const deckInstance = createDeck({
+                  container,
+      jsonInput,
+      tooltip,
+      customLibraries,
+      configuration,
+          });
+
+  </script>
+</html>
