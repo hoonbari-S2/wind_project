@@ -124,15 +124,15 @@ def add_wind_features(df):
     is_summer = month.isin([7, 8]).astype(int) if isinstance(month, pd.Series) else (month in [7, 8])
     new_cols['heat_stagnation_index'] = (t_c / (ws_117m + 0.1)) * is_summer
 
-    # --- [v5 신규 추가] 5번 가설: 시계열 급변(Ramp Event) 및 이동 평균 ---
+    # --- [v5 신규 추가, v6 수정] 5번 가설: 시계열 급변(Ramp Event) 및 이동 평균 ---
     if 'gfs_mean_117m_ws' in new_cols:
         ws = new_cols['gfs_mean_117m_ws']
         new_cols['ws_diff_prev1'] = ws.diff(1).fillna(0)   # t - (t-1)
-        new_cols['ws_diff_next1'] = ws.diff(-1).fillna(0)  # t - (t+1)
+        new_cols['ws_diff_prev2'] = ws.diff(2).fillna(0)   # t - (t-2)
         
-        # 3시간 이동평균 및 이동표준편차 (바람의 변동성)
-        new_cols['ws_rolling_mean_3h'] = ws.rolling(3, min_periods=1, center=True).mean()
-        new_cols['ws_rolling_std_3h'] = ws.rolling(3, min_periods=1, center=True).std().fillna(0)
+        # center=False (기본값) 적용하여 과거 시점 기반 이동평균/표준편차 산출
+        new_cols['ws_rolling_mean_3h'] = ws.rolling(3, min_periods=1, center=False).mean()
+        new_cols['ws_rolling_std_3h'] = ws.rolling(3, min_periods=1, center=False).std().fillna(0)
 
     new_df = pd.DataFrame(new_cols, index=df.index)
     return pd.concat([df, new_df], axis=1)
