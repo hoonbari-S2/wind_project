@@ -1,3 +1,5 @@
+from tomlkit import ws
+
 import numpy as np
 import pandas as pd
 
@@ -16,20 +18,31 @@ def process_calendar_features(dt_series):
     out["month_cos"] = np.cos(2 * np.pi * out["month"] / 12)
     return out
 
-def add_wind_features(df):
+def add_wind_features(df): # v6 : calc_wind_dict 함수에서 삼각함수 계산부분 제거, add_wind_direction_sector 함수를 통한 풍향 계산 섹터 추가
     df = df.copy()
     new_cols = {}
     
     def calc_wind_dict(u_series, v_series, prefix):
-        ws = np.sqrt(u_series**2 + v_series**2)
+        ws = np.sqrt(u_series**2 + v_series**2)  # 풍속 계산
         new_cols[f'{prefix}_ws'] = ws
-        new_cols[f'{prefix}_ws_cubed'] = ws ** 3
-        
-        # 풍향 sin/cos 변환
-        rad = np.arctan2(v_series, u_series)
-        new_cols[f'{prefix}_wd_sin'] = np.sin(rad)
-        new_cols[f'{prefix}_wd_cos'] = np.cos(rad)
+        new_cols[f'{prefix}_ws_cubed'] = ws ** 3  # 풍속 세제곱, WPD 계산용. 
         return ws
+
+    def add_wind_direction_sector(df, u_col, v_col, prefix):
+        u = df[u_col]
+        v = df[v_col]
+        
+        # 1. 기상학적 풍향 각도 계산 (0° ~ 360°, 진북 0° 기준 불어오는 방향)
+        # U: 동서 성분, V: 남북 성분
+        rad = np.arctan2(-u, -v)
+        deg = np.degrees(rad) % 360.0
+        
+        # 2. 16방위 섹터 범주화 (0: N, 1: NNE, 2: NE, ..., 15: NNW)
+        # 한 섹터당 22.5° (360 / 16)
+        sector_16 = np.floor((deg + 11.25) / 22.5) % 16
+        
+        return deg, sector_16.astype(int)
+
 
     # 1. GFS Mean 80m & 100m 풍속/풍향 산출
     gfs_u80 = df.get('gfs_mean_heightAboveGround_80_u')
@@ -75,23 +88,6 @@ def add_wind_features(df):
     if 'gfs_mean_117m_ws' in new_cols and 'ldaps_mean_117m_ws' in new_cols:
         new_cols['diff_ws_117m_gfs_ldaps'] = new_cols['gfs_mean_117m_ws'] - new_cols['ldaps_mean_117m_ws']
 
-    # 4. 피벗된 개별 격자(Grid)별 풍속 및 sin/cos 자동 생성
-    for col in list(df.columns):
-        if col.endswith('_heightAboveGround_80_u'):
-            prefix = col.replace('_heightAboveGround_80_u', '_80m')
-            v_col = col.replace('_80_u', '_80_v')
-            if v_col in df.columns:
-                calc_wind_dict(df[col], df[v_col], prefix)
-        elif col.endswith('_heightAboveGround_100_100u'):
-            prefix = col.replace('_heightAboveGround_100_100u', '_100m')
-            v_col = col.replace('_100_100u', '_100_100v')
-            if v_col in df.columns:
-                calc_wind_dict(df[col], df[v_col], prefix)
-        elif col.endswith('_heightAboveGround_10_10u'):
-            prefix = col.replace('_heightAboveGround_10_10u', '_10m')
-            v_col = col.replace('_10_10u', '_10_10v')
-            if v_col in df.columns:
-                calc_wind_dict(df[col], df[v_col], prefix)
 
     # --- [v5 신규 추가] 4번 가설: 푄현상(높새바람) & 열돔/대기정체 피처 ---
     u_gfs = df.get('gfs_mean_heightAboveGround_100_100u', 0)

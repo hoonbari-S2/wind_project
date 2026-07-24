@@ -139,8 +139,15 @@ project_root/
 └── experiment_log.xlsx    # 정량적 실험 결과 및 실행 소요 시간 자동 기록
 
 ```
+### 3.2 EDA 정밀화
 
-### 3.2 검증 체계 (Validation Strategy)
+ 1️⃣ 기초 검증 (타입 점검 + 물리적 범위 & 분산 0 변수 식별)
+ 2️⃣ 시차 검증 (타입 점검 + 물리적 범위 & 분산 0 변수 식별, 변수 다중공선성 진단 등)
+ 3️⃣ 피처 확장 (이상기체 공기밀도 ρ, WPD, GFS 상공 기류 등 신규 물리 피처 연동)
+ 4️⃣ 최종 가지치기 (Gain = 0 및 분산 0 피처 최종 Pruning 후 XGBoost CUDA 학습)
+
+
+### 3.3 검증 체계 (Validation Strategy)
 
 * **Year-Month `GroupKFold` 도입**:
 * 기존 무작위 `KFold(shuffle=True)` 적용 시 시계열 파생 변수(`diff`, `rolling`)로 인한 **Validation Data Leakage (미래 정보 참조)** 발생.
@@ -292,11 +299,11 @@ $$\hat{y}_{\text{adjusted}} = \text{clip}\left(\hat{y} \cdot \alpha + \beta, \, 
 
 ---
 
-## 7. 향후 액션 플랜 및 v6+ 진행 로드맵
+## 7. 향후 액션 플랜 및 v6~ 진행 로드맵
 
 ```
   Step 1. 기초 데이터 EDA 정밀화 (EDA.ipynb 실행)
-   └── 그룹별 Target 분포, 결측치 패턴, 풍속-발전량 Power Curve 이상치 재검증[cite: 15, 16]
+   └── 그룹별 Target 분포, 결측치 패턴, 풍속-발전량 Power Curve 이상치 재검증
 
    [EDA 확장 파이프라인]
  ├── 1. 기초 통계 & 분포 정밀 점검 (Target & Weather Features)
@@ -310,16 +317,16 @@ $$\hat{y}_{\text{adjusted}} = \text{clip}\left(\hat{y} \cdot \alpha + \beta, \, 
        └── 피처 간 높은 상관관계(|r| > 0.95)를 갖는 다중공선성 변수 그룹 추출
 
   Step 2. 기존 v2~v5 피처 유효성 검증 및 가지치기 (Feature Pruning)
-   └── SHAP / Feature Importance 분석으로 다중공선성 및 불필요 피처 정리[cite: 15]
+   └── SHAP / Feature Importance 분석으로 다중공선성 및 불필요 피처 정리
 
   Step 3. v6+ 물리/도메인 피처 단계적 반영 및 OOF 점수 검증
-   └── 공기밀도(ρ), WPD, LDAPS 난류 변동폭, GFS 상공 바람, Cross-Lag 피처 생성 및 단독/합성 실험[cite: 15, 17]
+   └── 공기밀도(ρ), WPD, LDAPS 난류 변동폭, GFS 상공 바람, Cross-Lag 피처 생성 및 단독/합성 실험
 
   Step 4. 모델 다변화 및 앙상블 파이프라인 구축
-   └── LightGBM, CatBoost, XGBoost 개별 최적화 후 가중 평균(Weighted Ensemble) 적용[cite: 12, 13]
+   └── LightGBM, CatBoost, XGBoost 개별 최적화 후 가중 평균(Weighted Ensemble) 적용
 
   Step 5. 2차 발표평가 대비 가용성 검증
-   └── experiment_log.xlsx에 학습 및 추론 소요 시간(Execution Time) 로깅 자동화[cite: 4, 15]
+   └── experiment_log.xlsx에 학습 및 추론 소요 시간(Execution Time) 로깅 자동화
 
 ```
 
