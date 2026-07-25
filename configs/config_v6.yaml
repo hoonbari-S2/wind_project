@@ -1,0 +1,39 @@
+# configs/config_v6.yaml
+version: "v6"
+seed: 42
+n_splits: 5
+model_type: "XGBoost"
+
+features_summary: "v5 피처 + WPD/850hPa/De-rating/푄현상 등 6대 도메인 피처 + 35개 Pruning + Nelder-Mead 후처리"
+notes: "v6: EDA 검증 기반 6대 물리/도메인 피처 신규 도입, 다중공선성/TreeSHAP 35개 Pruning, Nelder-Mead (alpha, beta, zero_th) 후처리 고도화, XGBoost CUDA 적용, run.py 엔트리포인트 구축"
+
+data_paths:
+  train_dir: "./train"
+  test_dir: "./test"
+  info_path: "./info.xlsx"
+  save_model_dir: "./saved_models/v6"
+  submission_dir: "./submissions"
+
+targets:
+  - "kpx_group_1"
+  - "kpx_group_2"
+  - "kpx_group_3"
+
+capacity_kwh:
+  kpx_group_1: 21600
+  kpx_group_2: 21600
+  kpx_group_3: 21000
+
+model_params:
+  objective: "reg:tweedie"
+  tweedie_variance_power: 1.5
+  eval_metric: "tweedie-nloglik@1.5"
+  tree_method: "hist"
+  device: "cuda:0"
+  n_estimators: 1000
+  learning_rate: 0.03
+  max_depth: 6
+  subsample: 0.8
+  colsample_bytree: 0.8
+  random_state: 42
+  early_stopping_rounds: 30

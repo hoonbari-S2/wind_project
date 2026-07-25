@@ -1,13 +1,18 @@
+import os
 import yaml
 import joblib
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from src.features import process_calendar_features, add_wind_features
+
+from src.features import build_full_feature_pipeline
 from src.postprocessing import apply_postprocessing
 
+# ==============================================================================
 # 1. Config 로드
-config_path = "./configs/config_v5.yaml"  
+# ==============================================================================
+config_path = "./configs/config_v6.yaml"
+
 with open(config_path, "r", encoding="utf-8") as f:
     config = yaml.safe_load(f)
 
@@ -16,7 +21,9 @@ test_dir = Path(config["data_paths"]["test_dir"])
 sub_dir = Path(config["data_paths"]["submission_dir"])
 sub_dir.mkdir(parents=True, exist_ok=True)
 
+# ==============================================================================
 # 2. Test 및 피처 명세 데이터 로드
+# ==============================================================================
 print("🔄 [Data Load] Test 데이터 및 피처 명세 로드 중...")
 sample_sub = pd.read_csv("./sample_submission.csv", encoding="utf-8-sig")
 ldaps_test = pd.read_csv(test_dir / "ldaps_test.csv", encoding="utf-8-sig")
@@ -36,18 +43,19 @@ def process_weather_data(df, prefix):
     drop_cols = {"data_available_kst_dtm", "latitude", "longitude"}
     value_cols = [c for c in df.columns if c not in {"forecast_kst_dtm", "grid_id", *drop_cols}]
     
-    # 1. Grid 별 Pivot
+    # Grid 별 Pivot
     pivoted = df.pivot(index="forecast_kst_dtm", columns="grid_id", values=value_cols)
     pivoted.columns = [f"{prefix}_g{col[1]}_{col[0]}" for col in pivoted.columns]
     pivoted = pivoted.reset_index()
     
-    # 2. Grid 요약 Mean
+    # Grid 요약 Mean
     agg_mean = df.groupby("forecast_kst_dtm")[value_cols].mean()
     agg_mean.columns = [f"{prefix}_mean_{c}" for c in agg_mean.columns]
     agg_mean = agg_mean.reset_index()
     
     return pivoted.merge(agg_mean, on="forecast_kst_dtm", how="inner")
 
+print("🔄 [Data Processing] Test 기상 데이터 피벗 및 마스터 데이터셋 구축 중...")
 test_weather = process_weather_data(ldaps_test, "ldaps").merge(
     process_weather_data(gfs_test, "gfs"), on="forecast_kst_dtm", how="inner"
 )
@@ -57,27 +65,27 @@ test_df = sample_sub[["forecast_id", "forecast_kst_dtm"]].merge(
     test_weather, on="forecast_kst_dtm", how="left"
 )
 
-# 3. 피처 생성 및 학습 피처 목록에 맞게 재정렬
-cal_feat = process_calendar_features(test_df["forecast_kst_dtm"])
-X_test_raw = pd.concat(
-    [cal_feat, test_df.drop(columns=["forecast_id", "forecast_kst_dtm"])],
-    axis=1
-)
-X_test_raw = add_wind_features(X_test_raw)
+# ==============================================================================
+# 3. 통합 피처 엔지니어링 & 학습 피처 순서 재정렬
+# ==============================================================================
+print("🚀 [Feature Engineering] 6대 도메인 피처 생성 및 Pruning 적용 중...")
+df_test_processed = build_full_feature_pipeline(test_df)
 
 # 무한대(inf) 정제
-X_test_imp = X_test_raw.replace([np.inf, -np.inf], np.nan)
+df_test_processed = df_test_processed.replace([np.inf, -np.inf], np.nan)
 
-# 학습 시 피처 순서 및 컬럼 구성과 동일하게 강제 재정렬 (부족한 컬럼은 NaN 채움)
-X_test_imp = X_test_imp.reindex(columns=feature_cols)
+# 학습 피처 컬럼 순서 및 구성 강제 일치 (누락 시 NaN 채움)
+X_test = df_test_processed.reindex(columns=feature_cols)
 
+# ==============================================================================
 # 4. 추론 및 K-Fold 모델 앙상블
+# ==============================================================================
 submission = sample_sub[["forecast_id", "forecast_kst_dtm"]].copy()
 n_splits = config.get("n_splits", 5)
 
 for target in config["targets"]:
-    print(f"🔮 [Inference: {target}] {n_splits}-Fold 앙상블 추론 진행 중...")
-    target_preds = np.zeros(len(X_test_imp))
+    print(f"🔮 [Inference: {target.upper()}] {n_splits}-Fold 앙상블 추론 진행 중...")
+    target_preds = np.zeros(len(X_test))
     cap = config["capacity_kwh"][target]
     
     for fold in range(n_splits):
@@ -86,22 +94,28 @@ for target in config["targets"]:
             raise FileNotFoundError(f"모델 파일({model_path})을 찾을 수 없습니다.")
             
         model = joblib.load(model_path)
-        fold_pred = model.predict(X_test_imp)
+        fold_pred = model.predict(X_test)
         target_preds += fold_pred / n_splits
     
-    # 상한선(그룹별 설비용량) 및 하한선(0) 클리핑 적용
+    # Raw 예측값 상하한 클리핑
     submission[target] = np.clip(target_preds, 0, cap)
 
-# 5. 최적화 후처리 적용
+# ==============================================================================
+# 5. Nelder-Mead 최적화 후처리 적용
+# ==============================================================================
 post_params_path = model_dir / "post_params.pkl"
 if post_params_path.exists():
-    print("⚙️ [Post-Processing] 최적화 후처리 파라미터 적용 중...")
+    print("⚙️ [Post-Processing] Nelder-Mead 최적화 후처리 파라미터 적용 중...")
     post_params = joblib.load(post_params_path)
     submission = apply_postprocessing(submission, post_params)
+else:
+    print("⚠️ [Post-Processing] post_params.pkl을 찾을 수 없어 Raw 예측값을 유지합니다.")
 
+# ==============================================================================
 # 6. 제출 파일 저장
+# ==============================================================================
 submission["forecast_kst_dtm"] = submission["forecast_kst_dtm"].dt.strftime("%Y-%m-%d %H:%M:%S")
-out_path = sub_dir / f"submit_{config['version']}.csv"
+out_path = sub_dir / f"submit_{config.get('version', 'v7')}.csv"
 submission.to_csv(out_path, index=False, encoding="utf-8-sig")
 
-print(f"\n🚀 추론 완료! 제출 파일이 저장되었습니다: {out_path}")
+print(f"\n🚀 추론 완료! 최종 제출 파일이 저장되었습니다: {out_path}")
