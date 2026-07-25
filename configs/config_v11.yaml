@@ -1,0 +1,51 @@
+# configs/config_v11.yaml
+# v6 를 복사해 만든 것. 아래 표시된 부분만 v6 와 다르다.
+version: v11                                   # ← 변경
+seed: 42
+n_splits: 5                                    # LOYO 에서는 미사용 (연도 수가 폴드 수)
+
+targets: [kpx_group_1, kpx_group_2, kpx_group_3]
+capacity_kwh:
+  kpx_group_1: 21600
+  kpx_group_2: 21600
+  kpx_group_3: 21000
+
+data_paths:
+  train_dir: ./train                           # 프로젝트 루트 바로 아래
+  test_dir: ./test
+  save_model_dir: ./saved_models/v11           # ← 변경 (v6 덮어쓰지 않게)
+  submission_dir: ./submissions
+
+model_type: XGBoost
+
+# v6 와 동일. 정제 타깃도 kWh 스케일이라 Tweedie 설정을 그대로 써도 된다.
+model_params:
+  objective: "reg:tweedie"
+  tweedie_variance_power: 1.5
+  eval_metric: "tweedie-nloglik@1.5"
+  tree_method: "hist"
+  device: "cuda:0"
+  n_estimators: 1000
+  learning_rate: 0.03
+  max_depth: 6
+  subsample: 0.8
+  colsample_bytree: 0.8
+  random_state: 42
+  early_stopping_rounds: 30
+
+# ↑ model_params 안의 값은 refit 단계에서 제거된다.
+#   validation.fit_no_leak 가 참조하는 건 아래 최상위 값이므로 같이 적어둔다.
+early_stopping_rounds: 30
+
+# 실험 로그에 그대로 들어간다. 버전마다 반드시 갱신할 것.
+features_summary: >-
+  v6 6대 물리/도메인 피처(WPD·850hPa 유입·De-rating·푄현상) + 35개 Pruning
+  + SCADA 가동률 보정 정제 타깃(cf) + piecewise 단조 후처리
+
+notes: >-
+  v11: SCADA(157,819+105,264행) 시각정렬 확정(vestas +50분 / unison +60분, R²=0.9993/0.9985) 후
+  가동률 마스크 산출 → 정비정지 4.2%/3.8%, 출력제한 1.7%/2.6% 를 학습 타깃에서 정규화.
+  타깃을 cf = label/(k×가용용량) 으로 교체(k: G1 0.9857 / G2 0.9893 / G3 1.0009).
+  검증을 월 GroupKFold → LOYO 로 교체하고 early stopping 누설 차단(내부 블록 ES + refit).
+  후처리는 Nelder-Mead 초기 simplex 스케일 버그 수정 + 구간별 단조 보정으로 교체.
+  A/B 통제실험 결과 정제 타깃이 raw +0.0126 (3개 연도 전부 동일 부호, 표준편차 0.0043) 우세.

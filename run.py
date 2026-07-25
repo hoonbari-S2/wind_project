@@ -12,8 +12,8 @@ def main():
     parser = argparse.ArgumentParser(description="BARAM 2026 Pipeline Runner")
     parser.add_argument(
         "mode", 
-        choices=["train", "inference"], 
-        help="실행할 파이프라인 선택 ('train' 또는 'inference')"
+        choices=["train", "inference", "ensemble"], 
+        help="실행할 파이프라인 선택 ('train', 'inference', 'ensemble')"
     )
     args = parser.parse_args()
 
@@ -23,6 +23,9 @@ def main():
     elif args.mode == "inference":
         print("🚀 [Pipeline] main/inference.py 추론 파이프라인을 실행합니다.\n")
         runpy.run_module("main.inference", run_name="__main__")
+    elif args.mode == "ensemble":
+        print("🚀 [Pipeline] main/ensemble.py 앙상블 및 후처리 파이프라인을 실행합니다.\n")
+        runpy.run_module("main.ensemble", run_name="__main__")
 
 if __name__ == "__main__":
     main()

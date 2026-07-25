@@ -1,10 +1,33 @@
-# .gitignore
-*.pkl
-*.csv
-saved_models/
-submissions/
-train/
-test/
+# ── 대회 원본 데이터 (용량 큼 / 재배포 소지) ──────────────────────────
+/train/
+/test/
+/data/
+sample_submission.csv
+
+# ── 학습 산출물 (용량 큼, 코드로 재현 가능) ───────────────────────────
+saved_models/**/*.pkl
+saved_models/**/*.json
+saved_models/**/*.csv
+saved_models/_ab_step2/
+submissions/*.csv
+
+# ── 실행 부산물 ───────────────────────────────────────────────────────
+catboost_info/
 __pycache__/
-.idea/
+*.py[cod]
+.ipynb_checkpoints/
+*.log
+
+# ── 환경 ──────────────────────────────────────────────────────────────
 .vscode/
+.idea/
+.env
+*.swp
+.DS_Store
+
+# ── 반드시 추적 (위 규칙보다 우선) ────────────────────────────────────
+!.gitignore
+!configs/*.yaml
+!information/info.xlsx
+!experiment_log.xlsx
+!project_strategy.md

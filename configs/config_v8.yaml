@@ -1,0 +1,36 @@
+version: "v8"
+seed: 42
+n_splits: 5
+model_type: "CatBoost"
+
+features_summary: "v6 동일 피처 (6대 도메인 피처 + 35개 Pruning)"
+notes: "v8: v6 피처 파이프라인 기반 CatBoost (CPU 32스레드 가속) 모델 교체 및 OOF 평가"
+
+data_paths:
+  train_dir: "./train"
+  test_dir: "./test"
+  info_path: "./info.xlsx"
+  save_model_dir: "./saved_models/v8"
+  submission_dir: "./submissions"
+
+targets:
+  - "kpx_group_1"
+  - "kpx_group_2"
+  - "kpx_group_3"
+
+capacity_kwh:
+  kpx_group_1: 21600
+  kpx_group_2: 21600
+  kpx_group_3: 21000
+
+model_params:
+  loss_function: "Tweedie:variance_power=1.5"
+  iterations: 500            
+  learning_rate: 0.05        
+  depth: 6
+  border_count: 32           
+  rsm: 0.8
+  early_stopping_rounds: 30
+  random_seed: 42
+  thread_count: -1
+  verbose: False

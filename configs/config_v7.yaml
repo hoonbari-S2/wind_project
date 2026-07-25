@@ -1,0 +1,36 @@
+version: "v7"
+seed: 42
+n_splits: 5
+model_type: "LightGBM"
+
+features_summary: "v6 동일 피처 (6대 도메인 피처 + 35개 Pruning)"
+notes: "v7: v6 피처 파이프라인 기반 LightGBM 모델 교체 및 OOF 평가 (CPU 32쓰레드 병렬)"
+
+data_paths:
+  train_dir: "./train"
+  test_dir: "./test"
+  info_path: "./info.xlsx"
+  save_model_dir: "./saved_models/v7"
+  submission_dir: "./submissions"
+
+targets:
+  - "kpx_group_1"
+  - "kpx_group_2"
+  - "kpx_group_3"
+
+capacity_kwh:
+  kpx_group_1: 21600
+  kpx_group_2: 21600
+  kpx_group_3: 21000
+
+model_params:
+  objective: "tweedie"
+  tweedie_variance_power: 1.5
+  n_estimators: 1000
+  learning_rate: 0.03
+  num_leaves: 31
+  subsample: 0.8
+  colsample_bytree: 0.8
+  random_state: 42
+  n_jobs: -1
+  verbose: -1

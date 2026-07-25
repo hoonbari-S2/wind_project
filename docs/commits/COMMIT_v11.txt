@@ -1,0 +1,40 @@
+v11: SCADA 가동률 보정 타깃 + LOYO 검증 + 후처리 재설계 (LB 0.62893 -> 0.63632)
+
+리더보드
+  Public 0.636316  (1-NMAE 0.864890 / FICR 0.407743)
+  v6 대비 +0.00739. 기여 분해는 FICR 93.5% / NMAE 6.5%.
+
+[신규 모듈]
+  src/scada.py      SCADA 시각정렬, 시간집계, 가동률 판정, 타깃 정제
+  src/grids.py      그룹별 격자 IDW 가중 추출 (작성 완료, 미적용)
+  src/validation.py LOYO 폴드, 누설 없는 early stopping, 연도별 오차막대/유의성 판정
+  src/causality.py  대회 3항(Data Leakage) 자동 감사
+
+[SCADA 도입]
+  power_kw10m 은 kW 가 아니라 10분간 kWh 임을 확인 (정격 600/700 = 3.6/4.2 MW).
+  시각 정렬 확정: vestas +50분, unison +60분 (R2 0.99930 / 0.99848).
+  계통 손실계수 k: G1 0.9857 / G2 0.9893 / G3 1.0009 (잔차 0.54~1.16% cap).
+  가동률 판정: 정비정지 4.2%/3.8%, 출력제한 1.7%/2.6%.
+  타깃을 label*cap/(k*가용용량) 으로 교체 (Tweedie 스케일 유지 위해 kWh 단위).
+
+[검증 체계 교체]
+  월 GroupKFold -> LOYO. 테스트가 2025년 통째이므로 폴드도 연 단위여야 함.
+  early stopping 을 검증폴드가 아닌 학습셋 내부 예보블록에서 수행 후 refit.
+  연도별 짝비교로 유의성 판정 (부호일치 그리고 평균 절대값 > 표준편차).
+  A/B 통제실험: 정제 타깃 raw +0.0126 (3개 연도 전부 동일 부호, 표준편차 0.0043).
+
+[후처리 재설계]
+  scipy Nelder-Mead 초기 simplex 스케일 버그 수정.
+  x0=[1.0, 0.0, 10.0] 이면 beta 를 0.00025 kWh 스텝으로 탐색해 사실상 alpha 만
+  최적화되고 있었음 (설비용량 21,600 kWh). 합성 검증 기준 +0.010 손실.
+  구간별 단조 보정(piecewise) 추가. 밴드 프리미엄 +0.0549 -> +0.0665 (1등 +0.0523).
+
+[인프라]
+  train.py / inference.py config 하드코딩 제거 (train=v8, inference=v6 로 어긋나 있었음).
+  main/ 직접 실행 시 src 를 찾도록 sys.path 처리.
+  logger 에 Validation / Target / Raw OOF / Year Spread 열 추가.
+  검증 방식이 다르면 OOF 절대값 비교 불가하므로 로그에 명시.
+
+[규칙 준수]
+  causality.audit_causality 로 예측기준시점 이후 정보 미사용을 실행으로 검증.
+  v1~v10 은 후방 참조만 사용해 위반 없음 확인.
