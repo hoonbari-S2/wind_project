@@ -1,0 +1,83 @@
+# configs/config_v12.yaml
+# v11 대비 변경: 피처 가지치기(폴드별 top200) 도입. 배치1(물리 파생 피처)은 폐기.
+version: v12
+seed: 42
+n_splits: 5                                    # LOYO 에서는 미사용 (연도 수가 폴드 수)
+
+targets: [kpx_group_1, kpx_group_2, kpx_group_3]
+capacity_kwh:
+  kpx_group_1: 21600
+  kpx_group_2: 21600
+  kpx_group_3: 21000
+
+data_paths:
+  train_dir: ./train
+  test_dir: ./test
+  save_model_dir: ./saved_models/v12           # ← v11 덮어쓰지 않게
+  submission_dir: ./submissions
+
+model_type: XGBoost
+
+# v6 이후 동일. 정제 타깃도 kWh 스케일이라 Tweedie 설정을 그대로 쓴다.
+model_params:
+  objective: "reg:tweedie"
+  tweedie_variance_power: 1.5
+  eval_metric: "tweedie-nloglik@1.5"
+  tree_method: "hist"
+  device: "cuda:0"
+  n_estimators: 1000
+  learning_rate: 0.03
+  max_depth: 6
+  subsample: 0.8
+  colsample_bytree: 0.8
+  random_state: 42
+  early_stopping_rounds: 30
+
+# validation.fit_no_leak 가 참조하는 값 (model_params 안의 것은 refit 시 제거됨)
+early_stopping_rounds: 30
+
+# 실행 인자 기록용 — 실제 적용은 CLI 로 한다
+#   python main/train.py --config configs/config_v12.yaml --clean-target --top-k 200
+run_args: "--clean-target --top-k 200"
+
+features_summary: >-
+  v6 6대 물리/도메인 피처 + SCADA 가동률 보정 정제 타깃(cf) + piecewise 단조 후처리
+  + 폴드별 top200 피처 가지치기 (812 → 200). 배치1(물리 파생 피처 53개)은 검증 실패로 미적용.
+
+notes: >-
+  v12: 피처 가지치기 도입. 지금까지 실험은 전부 '더하는' 쪽이었고 빼는 쪽은 미검증이었다.
+  812개 피처 / 26,304행 / colsample 0.8 이면 트리마다 650개를 보게 되어 분할 후보가 희석된다는 가설.
+
+  [검증] step4_prune_sweep. 선택 누설을 막기 위해 각 LOYO 폴드의 학습셋 안에서만
+  중요도(gain)를 구하고 상위 K개로 재학습. 전체(812) 대비 연도별 짝비교 결과:
+  top400 +0.0034(std 0.0007) 신호 / top200 +0.0021(std 0.0001) 신호 /
+  top120 +0.0033(std 0.0021) 신호 / top60 +0.0042(std 0.0055) 노이즈 /
+  top30 -0.0005(std 0.0064) 노이즈. 120~400 구간이 모두 유의하며 top200 의 연도 일관성이
+  가장 높아(+0.0019/+0.0022/+0.0021) 이를 채택. gain 이 0 이 아닌 피처가 700~727개라
+  top30 까지 자르면 실제 정보 손실이 발생한다(-0.0005).
+
+  [배치1 폐기] 허브고도 풍속 재구성(LDAPS 50m 복원, GFS 3점 시어), 로터 등가풍속(REWS),
+  습윤공기 밀도, IEC 밀도보정 풍속, SCADA 경험 파워커브 53개를 추가했으나
+  raw +0.0005 / 후처리 +0.0001 로 둘 다 노이즈 판정.
+  원인: 트리 모델은 단일 피처의 단조변환에 불변이다. 합성 실험에서 v^3, pc(v), v*0.99 를
+  추가했을 때 MAE 개선이 정확히 0.0 이었고 오히려 +0.4 악화(노이즈 컬럼 추가 효과).
+  ldaps_v117 = ws50*2.34^alpha, v_dcorr = v*(rho/1.225)^(1/3), pc(v) 가 모두 단조변환이라
+  물리적으로는 옳으나 모델 입장에서 새 정보가 아니었다.
+  반면 상호작용(pc(v)*z)과 선형결합(0.6v+0.4z)은 실제로 MAE 를 낮췄다(-2.0 / -3.1).
+
+  [진단 소득] 풍속 추정 순위상관(스피어만, 26,304행): LDAPS 계열 0.749 vs GFS 계열 0.689.
+  GFS 0.25도 격자가 해발 1,000m 태백 능선의 지형 가속을 못 잡는다.
+  다만 ldaps_ws10(0.7618) > ldaps_ws50(0.7581) > ldaps_v117(0.7493) 로 외삽할수록
+  순위상관이 낮아진다. 예보값 두 개의 비율로 만든 alpha 가 신호가 아니라 노이즈를 넣고 있다.
+  gfs_v117_3pt(0.6887)와 기존 gfs_v117_powerlaw(0.6888)는 사실상 동일해 3점 적합은 무가치.
+
+  [살아남은 피처 — 배치2 설계 근거] 모든 폴드 상위 30 교집합에서 관측된 것:
+  (1) 전부 U성분(동서). V성분이 하나도 없다. 능선이 대체로 남북 방향이라 직교 성분이 지배적.
+  (2) 개별 격자가 _mean_ 보다 자주 선택된다(gfs_g5_100u 12/12 vs gfs_mean_100u 10/12).
+      16격자 균등평균이 정보를 죽이고 있다. 단 최상위 ldaps_g13 은 거리 기반 IDW 가중에서
+      최하위권이었으므로, 격자 가중은 거리가 아니라 데이터가 고른 것으로 가야 한다.
+  (3) surface_0_dswrf 가 7개 격자에서 반복 등장. 주야/안정도 대리변수로 쓰이고 있으며
+      EDA 의 야간 하층제트 관측과 일치한다. 배치2 안정도 피처에 대한 긍정 신호.
+  (4) v6 파생 피처 중 상위 30 생존은 wpd_ldaps_10m(rho x ws^3)과
+      ldaps_blh_v117_interaction(v/blh) 둘뿐이며 **둘 다 상호작용**이다.
+      푄현상, 열돔, 착빙, 커테일먼트, 히스테리시스, 능선 분해는 전부 탈락.

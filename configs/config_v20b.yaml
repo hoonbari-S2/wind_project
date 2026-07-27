@@ -1,0 +1,94 @@
+# configs/config_v20b.yaml
+# v20 재시험. v13 대비 변경: **ASOS 관측 피처 10개를 선택 절차 밖에서 강제 포함.**
+# v20 은 같은 가설을 물었으나 관측 피처가 gain top-200 에서 전량 탈락해 실험이 실행되지 않았음.
+version: v20b
+seed: 42
+n_splits: 5
+
+targets: [kpx_group_1, kpx_group_2, kpx_group_3]
+capacity_kwh:
+  kpx_group_1: 21600
+  kpx_group_2: 21600
+  kpx_group_3: 21000
+
+data_paths:
+  train_dir: ./train
+  test_dir: ./test
+  save_model_dir: ./saved_models/v20b
+  submission_dir: ./submissions
+
+model_type: XGBoost
+
+model_params:
+  objective: "reg:tweedie"
+  tweedie_variance_power: 1.5
+  eval_metric: "tweedie-nloglik@1.5"
+  tree_method: "hist"
+  device: "cuda:0"
+  n_estimators: 1000
+  learning_rate: 0.03
+  max_depth: 6
+  subsample: 0.8
+  colsample_bytree: 0.8
+  random_state: 42
+  early_stopping_rounds: 30
+
+early_stopping_rounds: 30
+
+run_args: >-
+  --clean-target --joint-groups kpx_group_1,kpx_group_3 --obs-features
+  --featcols-from ./saved_models/v13 --force-prefix obs_
+  --baseline-oof ./saved_models/v13/oof_preds.csv
+
+features_summary: >-
+  폴드별 피처 = v13 이 저장한 그 폴드의 200개 **그대로** + ASOS 관측 10개 = 210개.
+  top-K 재선택 없음(--featcols-from). 관측 10개 외에 v13 과 다른 컬럼은 0개.
+
+notes: >-
+  v20b: v20 무효 판정에 따른 재시험. §8.8, step33.
+
+  [v20 이 왜 무효였나 — 측정]
+  * 관측 피처 생존: 폴드 11개 × 10컬럼 = 110칸 중 **5칸**. 운영 경로인 joint(G1·G3)는 **0/30**.
+    gain 기준 top-200 에서 전량 탈락 — 관측 피처는 블록 상수(24행 동일값)라 시간별로 변하는
+    NWP 컬럼 800개와 gain 경쟁에서 구조적으로 불리한 것으로 보임 [가설].
+  * 그런데 v13 대비 top-200 겹침이 **74.4%**(폴드당 평균 51개 교체)였음. 교체된 것은 전부
+    기존 NWP 컬럼끼리이고 들어온 것 중 obs 는 0개. 풀에 컬럼 10개가 추가된 것만으로 m0 의
+    colsample RNG 스트림이 밀려 선택이 재추첨된 것임.
+  * 게이트 결과 +0.0012 [2022 +0.0027 / 2023 +0.0027 / 2024 −0.0019], 표준편차 0.0026.
+    **내부 대조군**: obs 0개인 G1 +0.0013 · G3 +0.0011 vs obs 있는 G2 +0.0007 —
+    처리군보다 대조군이 더 큼. 즉 +0.0012 는 관측 정보가 아니라 선택 재추첨임.
+  => v20 판정 `[무효]`. '관측은 안 통한다' 가 아니라 **관측이 모델에 들어간 적이 없다.**
+
+  [이번 설계 — 유일 변수 = 관측 10컬럼]
+  --featcols-from ./saved_models/v13 로 폴드별 피처를 v13 이 쓴 그 200개로 고정하고,
+  --force-prefix obs_ 로 관측 10개만 덧붙임. 검증 완료: v13 컬럼 100% 보존 + 추가분 10개 전부 obs_.
+  선택 절차가 상수이므로 v13 과의 Δ 는 정의상 관측 컬럼 10개의 순효과임 (§3.5 깨끗한 단일 변경).
+  --top-k 는 주지 않음 (featcols-from 이 대체).
+
+  [사전 등록 판정 — 결과 보기 전에 고정]
+  1. 게이트: raw OOF 연도짝비교 vs v13. §3.6 규칙 6 네 조건 전부
+     — 부호 3/3 일치 ∧ 부호 양수 ∧ |평균| > 표준편차 ∧ 그룹 2개 이상 양수.
+  2. `[분기]` 게이트를 통과하더라도 신뢰비율(|평균|/표준편차)이 **2.0 미만**이면 판정 보류하고
+     크기 맞춤 대조군(v13 200개 + 난수 컬럼 10개)을 1회 돌림. 대조군 Δ 가 처리군 Δ 의 50%를
+     넘으면 `[무효]`. 210 vs 200 자체의 colsample 섭동을 배제하기 위함 —
+     v20 에서 그 계열 섭동이 ±0.005 였으므로 무시할 수 없음.
+  3. `[분기]` 게이트 미달이면 관측 축 `[폐기]` 확정. 이번엔 피처가 실제로 모델에 들어간
+     상태에서의 판정이므로 재시험 없이 닫고 ECMWF(§8.8 2순위)로 넘어감.
+  4. 부수 진단(판정 기준 아님): 210개 안에서 obs 컬럼의 gain 합 비중을 기록함.
+     0 에 가까우면 '강제로 넣어도 트리가 안 씀' 이라는 더 강한 형태의 음성임.
+  5. **게이트 통과 ≠ 제출** (§3.30 규칙 1). 통과해도 제출은 별도 판단.
+     v15 전례 — 정보형·raw OOF 3/3 통과 후 LB −0.0010. 차이점은 관측이 v15 와 달리
+     **원천이 다른 정보**라는 것뿐이며, 그것은 제출 근거가 되기에 충분조건이 아님.
+  6. 창 24h · 관측소 2개 · 컬럼 10개 하나의 구성만 시험. 격자 탐색 금지 (v20 사전등록 승계).
+
+  [합법성 — v20 과 동일, 변경 없음]
+  * 규칙 3 실측 조항 명문 허용. 각 블록 기준시점(전날 13:00) −1h 까지의 관측만 사용.
+  * 규칙 4: 기상청 API허브, 공공누리 1유형, 재현 코드 scripts/step33_download_asos.py.
+  * 유의사항 7 무관 — 평가 데이터셋이 아니라 외부 관측 파일임.
+  * 블록 24행이 같은 기준시점을 공유하므로 피처는 블록 상수 — 행별 기준시점 위반 없음.
+
+  [실행]
+  python main/train.py --config configs/config_v20b.yaml --clean-target
+      --joint-groups kpx_group_1,kpx_group_3 --obs-features
+      --featcols-from ./saved_models/v13 --force-prefix obs_
+      --baseline-oof ./saved_models/v13/oof_preds.csv

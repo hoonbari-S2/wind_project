@@ -1,0 +1,90 @@
+# configs/config_v23.yaml
+# v13 대비 변경: **표본 가중 = 산식정합(ficr) 한 가지뿐.** 손실은 Tweedie 그대로.
+# = step9 의 **B조건(T+W)**. 여태 단독으로 학습·게이트·제출된 적이 한 번도 없음.
+version: v23
+seed: 42
+n_splits: 5
+
+targets: [kpx_group_1, kpx_group_2, kpx_group_3]
+capacity_kwh:
+  kpx_group_1: 21600
+  kpx_group_2: 21600
+  kpx_group_3: 21000
+
+data_paths:
+  train_dir: ./train
+  test_dir: ./test
+  save_model_dir: ./saved_models/v23
+  submission_dir: ./submissions
+
+model_type: XGBoost
+
+model_params:
+  objective: "reg:tweedie"          # <-- v14/v17 과 달리 손실은 안 건드림
+  tweedie_variance_power: 1.5
+  eval_metric: "tweedie-nloglik@1.5"
+  tree_method: "hist"
+  device: "cuda:0"
+  n_estimators: 1000
+  learning_rate: 0.03
+  max_depth: 6
+  subsample: 0.8
+  colsample_bytree: 0.8
+  random_state: 42
+  early_stopping_rounds: 30
+
+early_stopping_rounds: 30
+
+run_args: >-
+  --clean-target --joint-groups kpx_group_1,kpx_group_3 --sample-weight ficr
+  --featcols-from ./saved_models/v13
+  --baseline-oof ./saved_models/v13/oof_preds.csv
+
+features_summary: >-
+  피처는 v13 과 완전히 동일 (--featcols-from 으로 폴드별 200개 고정).
+  유일한 변경은 학습 표본 가중: 채점행에 0.5 + 0.5·a/ā, 채점 제외행에 0.2, 평균 1 정규화.
+
+notes: >-
+  v23: 발전량 가중 학습 — **밴드(FICR) 축의 첫 삽.** §3.25 (c), §3.10 step9 B조건.
+
+  [왜 이것인가 — 갭의 절반이 여기 있는데 삽을 안 댔음]
+  §3.25 실측: 필드 중위권 4팀이 우리와 **같은 정확도에서** FICR 을 +0.013~0.022 더 가져감.
+  #28 은 우리보다 부정확한데도 +0.022. 1위까지 갭의 43%가 이 잔차임.
+  §3.25 가 남긴 통로 셋 중 (a) 손실 모양은 §3.30 이 폐기, (b) 행별 배치는 step30 이 폐기,
+  **(c) 발전량-가중 배치만 미시험**임 — "FICR 은 a-가중이고 NMAE 는 행-균등이므로
+  같은 NMAE 라도 고발전 행에서 정확하면 FICR 이 더 나옴".
+  v23 이 그 (c) 의 유일한 구현이며 코드는 이미 있음(`--sample-weight ficr`).
+
+  [v14 와 무엇이 다른가 — 이게 핵심]
+  v14 = L(MAE) + W(가중) 을 **같이** 바꿔 LB −0.0120. v17 = L 만 바꿔 −0.0122.
+  §3.30 결론: **범인은 W 가 아니라 L 임.** 즉 W 의 LB 기여는 ≈0 으로 측정됐지
+  음수로 측정된 적이 없음. v23 은 **W 만** 바꿈.
+
+  §3.10 의 흡수 논증(밴드형 개선은 후처리와 상금을 나눠 가짐)도 조건별로 갈림 —
+      D (MAE+W) raw FICR 0.3762 ≈ A 의 후처리 후 FICR 0.3759   <- 상금을 먹어치움. 그래서 죽음
+      B (Tw +W) raw FICR 0.3520 << A 의 후처리 후 FICR 0.3759   <- 아직 안 먹음
+  step10 PART 2 가 잰 후처리 여지는 A +0.0236 / D +0.0017 이고 **B 는 미측정**임.
+  D 를 죽인 기전이 B 에 해당한다는 증거가 없음.
+
+  [사전 등록 판정 — 결과 보기 전에 고정]
+  0. 무결성: G2 는 독립 경로지만 이번엔 가중이 전 그룹에 걸리므로 **G2 도 움직임** (v21 과 다름).
+     G2 Δ = 0 이면 오히려 가중이 안 먹은 것이므로 원인부터 찾을 것.
+  1. 게이트: raw OOF 연도짝비교 vs v13, §3.6 규칙 6 네 조건.
+     사전 기대: step9 의 가중 주효과 W−U = **+0.0118**, D−A 분해상 B−A = **+0.0133**.
+     그 절반만 재현돼도 게이트는 통과할 크기임.
+  2. `[분기 A]` 게이트 통과 => **제출 후보.** 단 §3.30 규칙 1 — **통과 ≠ 제출.**
+     이건 밴드형이라 raw 이득이 후처리 여지를 깎았을 수 있고, 그건 **LB 로만 잼**(§3.6 규칙 4).
+     따라서 제출한다면 v23 단독 1회로 하고, 결과를 raw/후처리 분해해 읽음.
+  3. `[분기 B]` 게이트 미달 => **밴드 축의 마지막 학습측 후보가 닫힘.**
+     남는 것은 후처리 λ 프로브(LB 계측)뿐임. 그 사실을 정본에 명시하고 전략을 다시 씀.
+  4. **가중식 하나만 시험함.** `--low-weight` 스윕 금지, 가중 함수 형태 변경 금지 (다중성).
+  5. 부수 진단: Δ 를 1−NMAE / FICR 로 분해 (§3.23 계측 규칙 3).
+     FICR 몫이 압도적이어야 기전과 정합. 1−NMAE 가 더 크면 해석을 다시 씀.
+
+  [실행]
+  python main/train.py --config configs/config_v23.yaml --clean-target
+      --joint-groups kpx_group_1,kpx_group_3 --sample-weight ficr
+      --featcols-from ./saved_models/v13
+      --baseline-oof ./saved_models/v13/oof_preds.csv
+
+  정상 출력 확인선: `🌿 폴드별 피처 실제 [200]개` + 로그에 sample_weight=ficr

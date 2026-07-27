@@ -1,4 +1,5 @@
 """
+main/train_v11.py — 기존 main/train.py 교체본
 ==============================================================================
 바뀐 것
   1. config 를 CLI 인자로 받는다.  (기존: train=config_v8, inference=config_v6 하드코딩)
@@ -30,8 +31,12 @@ from src.utils import seed_everything, CAPACITY_KWH
 from src.features import build_full_feature_pipeline
 from src.logger import log_experiment
 from src.postprocessing import optimize_postprocessing, apply_postprocessing
-from src.validation import (run_cv, total_score, score_by_year, add_time_keys,
+from src.validation import (run_cv, run_cv_joint, total_score, group_score, score_by_year, add_time_keys,
                             nested_postprocess_score, is_difference_real)
+from src.features import build_full_feature_pipeline
+from src.features_grid import attach as attach_grid, save_marker    # ← 추가
+from src.features_anom import attach as attach_anom, save_state as save_anom_state
+from src.features_obs import attach as attach_obs, save_state as save_obs_state
 
 
 def process_weather_data(df, prefix):
@@ -72,6 +77,42 @@ def main():
                     help="SCADA 가동률로 정제한 cf 를 학습 타깃으로 사용 (step2 에서 +0.0126 확인)")
     ap.add_argument("--scada-dir", default="./data/scada_derived")
     ap.add_argument("--audit", action="store_true", help="피처 인과성 감사 (느림)")
+    ap.add_argument("--top-k", type=int, default=None,
+                    help="폴드별 상위 K개 피처만 사용 (step4 결과: 200~400 구간이 안정적)")
+    ap.add_argument("--joint-groups", default="",
+                    help="통합(long-format) 모델 예측을 쓸 그룹. 예: kpx_group_1,kpx_group_3 "
+                         "(step5b: G1 3/3 +, G3 2/2 +, G2 는 3/3 - 이므로 독립 유지)")
+    ap.add_argument("--objective", default=None, choices=["tweedie", "mae"],
+                    help="config 의 objective 를 덮어쓴다. mae -> reg:absoluteerror. "
+                         "(step9: L-T 주효과 +0.0137, 연도 3/3 일관)")
+    ap.add_argument("--sample-weight", default="none", choices=["none", "ficr"],
+                    help="ficr -> 산식정합 가중. 채점행에 0.5 균일 + 0.5 발전량비례, "
+                         "채점제외행(actual<10%%cap)은 --low-weight. "
+                         "(step9: W-U 주효과 +0.0118, 연도 3/3 일관)")
+    ap.add_argument("--low-weight", type=float, default=0.2,
+                    help="채점 제외행 가중치. 0 으로 두면 임계값 근처 캘리브레이션이 무너진다")
+    ap.add_argument("--obs-features", action="store_true",
+                    help="ASOS 공공 관측 피처 10개 (블록 상수. §8.8 / 규칙 3 실측 조항 준수)")
+    ap.add_argument("--obs-csv", default="./data/external/asos_hourly.csv")
+    ap.add_argument("--anom-features", action="store_true",
+                    help="후행 720h 이동평균 편차 7개 추가 (step31/§3.31 드리프트의 표현 대응)")
+    ap.add_argument("--year-weight", default=None,
+                    help="연도별 학습 표본 가중. 예: 2022:0.5,2023:0.75,2024:1.0 "
+                         "(step31: 습도↑·기온↑·서풍↓ 단조 드리프트 → 최신 해 강조. 학습 데이터만 사용)")
+    ap.add_argument("--grid-features", action="store_true",
+                    help="격자 간 산포·공간경도 54개 추가 (step23: raw +0.0023, 3/3, G3 최대)")
+    ap.add_argument("--baseline-oof", default=None,
+                    help="기준선 oof_preds.csv. 주면 raw OOF 짝비교로 게이트 판정")
+    ap.add_argument("--featcols-from", default=None,
+                    help="폴드별 피처를 이 디렉토리의 featcols_*.pkl 로 고정 (top-K 재선택 안 함). "
+                         "피처 추가 A/B 에서 선택 절차를 상수로 만들기 위한 것 — v20 실측상 "
+                         "풀에 10컬럼만 더해도 top-200 의 25%%가 뒤바뀌어 재추첨을 재게 됨")
+    ap.add_argument("--force-prefix", default="",
+                    help="쉼표 구분 접두사. 해당 컬럼은 선택 결과에 무조건 포함. 예: obs_ "
+                         "('정보가 없다' 와 'gain 선택에서 떨어졌다' 를 가르는 유일한 방법)")
+    ap.add_argument("--wgrid", action="store_true",
+                    help="A-4 격자 가중 (v21). 통합 경로에 폴드별·그룹별 NNLS 가중 풍속 3컬럼을 "
+                         "추가한다. 독립 경로(G2)는 손대지 않으므로 무손상 대조군이 됨")
     args = ap.parse_args()
 
     t0 = time.time()
@@ -96,9 +137,18 @@ def main():
     base["forecast_kst_dtm"] = pd.to_datetime(base["forecast_kst_dtm"])
     df = base.merge(w, on="forecast_kst_dtm", how="left")
 
-    df_raw = df.copy()                       # 인과성 감사용 (피처 생성 전)
+    df_raw = df.copy()
     print("🚀 피처 생성 중...")
     df = build_full_feature_pipeline(df).replace([np.inf, -np.inf], np.nan)
+    if args.grid_features:                                    # ← 추가 3줄
+        df = attach_grid(df, ldaps, gfs)
+    save_marker(save_dir, args.grid_features)
+    if args.anom_features:                                    # ← 추가 (step32/§3.31)
+        df = attach_anom(df)
+        save_anom_state(save_dir, df)
+    if args.obs_features:                                     # ← 추가 (step33/§8.8)
+        df = attach_obs(df, args.obs_csv)
+        save_obs_state(save_dir, df)
     df = add_time_keys(df)
 
     if args.audit:
@@ -107,10 +157,48 @@ def main():
         ok, rep = audit_causality(df_raw, build_full_feature_pipeline, n_blocks=5)
         assert ok, f"규칙 3항 위반 피처: {rep.feature.tolist()}"
 
+    # ---------------- 목적함수 오버라이드 (선택) ----------------
+    model_params = dict(config.get("model_params", {}))
+    if args.objective == "mae":
+        model_params.pop("tweedie_variance_power", None)
+        model_params["objective"] = "reg:absoluteerror"
+        model_params["eval_metric"] = "mae"
+        print("🎯 목적함수: reg:absoluteerror (NMAE 는 용량정규화 L1 이므로 그룹 안에서 "
+              "MAE 최소화 = NMAE 최소화. 또한 조건부 중앙값 예측이라 FICR 밴드에 더 많이 들어간다)")
+    elif args.objective == "tweedie":
+        model_params["objective"] = "reg:tweedie"
+        model_params.setdefault("tweedie_variance_power", 1.5)
+        model_params["eval_metric"] = "tweedie-nloglik@1.5"
+
     # ---------------- 정제 타깃 (선택) ----------------
     # 원본 라벨은 answer_raw 로 보존한다. 채점은 반드시 원본 kWh 기준으로 해야 한다.
     answer = df[targets].copy()
     scale = None
+
+    # ---------------- 산식정합 표본가중 (선택) ----------------
+    # 가중은 반드시 '원본 라벨' 로 만든다. 정제 타깃으로 만들면 채점 마스크가 어긋난다.
+    weight_col = None
+    if args.sample_weight == "ficr":
+        weight_col = "_w_"
+        for g in targets:
+            a = answer[g].to_numpy(float)
+            cap = CAPACITY_KWH[g]
+            w = np.ones(len(a), dtype=float)
+            fin = np.isfinite(a)
+            scored = fin & (a >= 0.10 * cap)
+            if scored.sum() >= 100:
+                # 산식 0.5*(1-NMAE) + 0.5*FICR 의 구조를 그대로 옮긴다.
+                #   NMAE 항  : 채점행에 균일          -> 0.5
+                #   FICR 항  : 채점행에 발전량 비례   -> 0.5 * a/mean(a_scored)
+                #   채점 제외행은 점수에 안 들어가지만 0 으로 버리면 임계값 근처
+                #   캘리브레이션이 무너져 채점행 예측까지 흔들린다 -> low_weight
+                w[fin] = args.low_weight
+                w[scored] = 0.5 + 0.5 * a[scored] / a[scored].mean()
+                w[fin] = w[fin] / w[fin].mean()            # 평균 1 (학습률과 분리)
+            df[f"_w_{g}"] = w
+        print(f"⚖️  산식정합 가중 사용 (채점제외행 {args.low_weight}). "
+              + ", ".join(f"{g}:채점 {int((np.isfinite(answer[g])&(answer[g]>=0.10*CAPACITY_KWH[g])).sum()):,}행"
+                          for g in targets))
     if args.clean_target:
         ct = pd.read_csv(Path(args.scada_dir) / "clean_target.csv", encoding="utf-8-sig")
         ct["forecast_kst_dtm"] = pd.to_datetime(ct.pop("kst_dtm"))
@@ -135,9 +223,25 @@ def main():
         print("🧹 정제 타깃 사용 (가용률 보정 kWh). 추론 환산 배율(k×평균가용률): "
               + ", ".join(f"{g}={scale[g]:.4f}" for g in targets))
 
+    # ---------------- 연도 최신 가중 (선택, step31/§3.31) ----------------
+    # ficr 가중과 곱으로 결합 가능. 반드시 평균 1 로 재정규화 (학습률과 분리).
+    if args.year_weight:
+        yw = {int(k): float(v) for k, v in (p_.split(":") for p_ in args.year_weight.split(","))}
+        wy = np.array([yw.get(int(y), 1.0) for y in df["_year"].to_numpy()], dtype=float)
+        weight_col = weight_col or "_w_"
+        for g in targets:
+            base_w = df[f"_w_{g}"].to_numpy(float) if f"_w_{g}" in df.columns else np.ones(len(df))
+            w = base_w * wy
+            fin = np.isfinite(answer[g].to_numpy(float))
+            if fin.sum():
+                w[fin] = w[fin] / w[fin].mean()
+            df[f"_w_{g}"] = w
+        print(f"⏳ 연도 가중 사용: {yw}  (라벨 있는 행 평균 1 정규화)")
+
     exclude = (["forecast_kst_dtm", "kst_dtm", "data_available_kst_dtm",
                 "year_month", "_year", "_fday"] + targets
-               + [f"{g}_cf" for g in targets] + [f"{g}_avail_frac" for g in targets])
+               + [f"{g}_cf" for g in targets] + [f"{g}_avail_frac" for g in targets]
+               + [f"_w_{g}" for g in targets])            # 가중 컬럼은 피처가 아니다
     feature_cols = [c for c in df.select_dtypes(include=[np.number]).columns if c not in exclude]
     joblib.dump(feature_cols, save_dir / "feature_cols.pkl")
     print(f"📦 피처 {len(feature_cols)}개 / 행 {len(df)}개")
@@ -145,13 +249,51 @@ def main():
           + ", ".join(f"{t}={df.groupby('_year')[t].count().to_dict()}" for t in targets[:1]))
 
     # ---------------- 누설 없는 CV ----------------
-    oof, fold_df, _ = run_cv(df, feature_cols, targets,
-                             config.get("model_type", "XGBoost"),
-                             config.get("model_params", {}),
+    force_prefix = tuple(p.strip() for p in args.force_prefix.split(",") if p.strip())
+    if args.featcols_from:
+        print(f"📌 피처 선택 고정: {args.featcols_from}/featcols_*.pkl 재사용 "
+              f"(top-K 재선택 안 함)")
+    if force_prefix:
+        n_forced = len([c for c in feature_cols if c.startswith(force_prefix)])
+        print(f"📌 강제 포함 접두사 {force_prefix} → 컬럼 {n_forced}개")
+    oof, fold_df, _, fold_feats = run_cv(df, feature_cols, targets,
+                             config.get("model_type", "XGBoost"), model_params,
                              scheme=args.scheme, n_splits=config.get("n_splits", 5),
                              es_rounds=config.get("early_stopping_rounds", 50),
                              es_mode=args.es_mode, seed=config["seed"],
-                             save_dir=str(save_dir))
+                             save_dir=str(save_dir), top_k=args.top_k,
+                             weight_col=weight_col,
+                             featcols_from=args.featcols_from,
+                             force_prefix=force_prefix)
+    if args.top_k or args.featcols_from:
+        nf = sorted({len(v) for v in fold_feats.values()})
+        print(f"🌿 폴드별 피처 실제 {nf}개. featcols_*.pkl 저장됨")
+    joint_groups = [g.strip() for g in args.joint_groups.split(",") if g.strip()]
+    if joint_groups:
+        bad = [g for g in joint_groups if g not in targets]
+        if bad:
+            raise ValueError(f"--joint-groups 에 없는 그룹: {bad}")
+        fold_fn = None
+        if args.wgrid:
+            from src.grids_weighted import make_fold_feature_fn, OUT_COLS
+            fold_fn = make_fold_feature_fn(targets)
+            print(f"🧭 A-4 격자 가중: 통합 경로에 폴드별·그룹별 {OUT_COLS} 추가 "
+                  f"(독립 경로 G2 는 손대지 않음 = 무손상 대조군)")
+        oof_j, _, _ = run_cv_joint(df, feature_cols, targets,
+                                   config.get("model_type", "XGBoost"), model_params,
+                                   scheme=args.scheme, es_mode=args.es_mode,
+                                   es_rounds=config.get("early_stopping_rounds", 50),
+                                   seed=config["seed"], save_dir=str(save_dir),
+                                   top_k=args.top_k, weight_col=weight_col,
+                                   featcols_from=args.featcols_from,
+                                   force_prefix=force_prefix,
+                                   fold_feature_fn=fold_fn)
+        for g in joint_groups:
+            oof[g] = oof_j[g]
+        json.dump(joint_groups, open(save_dir / "joint_groups.json", "w"))
+        print(f"🔗 통합 모델 예측 사용: {', '.join(joint_groups)}  "
+              f"(나머지는 독립 모델)")
+
     if scale is not None:                               # cf -> kWh 로 되돌린다
         for g in targets:
             oof[g] = np.clip(oof[g] * scale[g], 0, CAPACITY_KWH[g])
@@ -165,6 +307,29 @@ def main():
     print(f"   Total {raw[0]:.4f}   1-NMAE {raw[1]:.4f}   FICR {raw[2]:.4f}")
     print("\n📐 [오차막대] 연도 하나가 곧 1회 시행이다. 이 표준편차보다 작은 차이는 노이즈.")
     _, _, spread = score_by_year(df, answer, oof, targets, label="raw OOF")
+
+    # ---------------- 게이트 (§3.6 규칙 2·6) ----------------
+    gate_ok = None
+    if args.baseline_oof:
+        prev = (pd.read_csv(args.baseline_oof, index_col=0)
+                  .reindex(index=oof.index, columns=targets).astype(float))
+        print(f"\n🚧 [게이트] raw OOF 짝비교 vs {args.baseline_oof}")
+        r = is_difference_real(df, answer, oof, prev, targets,
+                               name_a=config.get("version", "new"), name_b="baseline")
+        gpos = sum(int(group_score(answer[g].to_numpy(float), oof[g].to_numpy(float),
+                                   CAPACITY_KWH[g])[0]
+                       > group_score(answer[g].to_numpy(float), prev[g].to_numpy(float),
+                                     CAPACITY_KWH[g])[0]) for g in targets)
+        gate_ok = bool(r and r["real"] and r["mean"] > 0 and gpos >= 2)
+        print(f"   그룹 양수 {gpos}/{len(targets)}")
+        if gate_ok:
+            print("   ✅ 게이트 통과 — 제출 후보")
+        else:
+            print("\n" + "🛑" * 34)
+            print("🛑  게이트 미달 — raw OOF 가 기준선을 유의하게 넘지 못함")
+            print("🛑  §3.6 규칙 2·6: 부호 3/3 ∧ 양수 ∧ |평균|>표준편차 ∧ 그룹 2개 이상")
+            print("🛑  제출하지 말 것. 아래 후처리 점수는 §3.6 이 폐기한 지표임")
+            print("🛑" * 34 + "\n")
 
     # ---------------- 후처리 (중첩 평가) ----------------
     nested, _, nst = nested_postprocess_score(
@@ -182,6 +347,14 @@ def main():
     joblib.dump(post_params, save_dir / "post_params.pkl")
     json.dump({"scheme": args.scheme, "es_mode": args.es_mode, "post_mode": args.post_mode,
                "clean_target": bool(args.clean_target), "target_scale": scale,
+               "top_k": args.top_k, "joint_groups": joint_groups,
+               "featcols_from": args.featcols_from,
+               "force_prefix": list(force_prefix), "wgrid": bool(args.wgrid),
+               "objective": model_params.get("objective"),
+               "sample_weight": args.sample_weight, "gate_passed": gate_ok, 
+               "baseline_oof": args.baseline_oof,  
+
+               "low_weight": args.low_weight,
                "raw_oof": raw[0], "nested_post": nst[0], "year_spread": spread},
               open(save_dir / "validation_report.json", "w"), indent=2, default=float)
 
@@ -201,6 +374,8 @@ def main():
         validation=args.scheme,
         target_kind="clean_cf" if args.clean_target else "raw_label",
         es_mode=args.es_mode, post_mode=args.post_mode,
+        objective=model_params.get("objective", "-"),
+        sample_weight=args.sample_weight,
         raw_oof=raw[0], year_spread=spread, n_features=len(feature_cols),
         features_summary=f"{len(feature_cols)} feats"
                          + (" / clean_target(cf)" if args.clean_target else ""),

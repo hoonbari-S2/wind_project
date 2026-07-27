@@ -31,3 +31,4 @@ __pycache__/
 !information/info.xlsx
 !experiment_log.xlsx
 !project_strategy.md
+saved_models/

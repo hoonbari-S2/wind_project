@@ -1,0 +1,76 @@
+# configs/config_v20.yaml
+# v13 대비 변경: **ASOS 공공 관측 피처 10개 추가** (src/features_obs.py). 그 외 전부 동일.
+# 외부 데이터 최초 사용 — 규칙 3 실측 조항·규칙 4 준수, 소명 자료는 step33_download_asos.py.
+version: v20
+seed: 42
+n_splits: 5
+
+targets: [kpx_group_1, kpx_group_2, kpx_group_3]
+capacity_kwh:
+  kpx_group_1: 21600
+  kpx_group_2: 21600
+  kpx_group_3: 21000
+
+data_paths:
+  train_dir: ./train
+  test_dir: ./test
+  save_model_dir: ./saved_models/v20
+  submission_dir: ./submissions
+
+model_type: XGBoost
+
+model_params:
+  objective: "reg:tweedie"
+  tweedie_variance_power: 1.5
+  eval_metric: "tweedie-nloglik@1.5"
+  tree_method: "hist"
+  device: "cuda:0"
+  n_estimators: 1000
+  learning_rate: 0.03
+  max_depth: 6
+  subsample: 0.8
+  colsample_bytree: 0.8
+  random_state: 42
+  early_stopping_rounds: 30
+
+early_stopping_rounds: 30
+
+run_args: >-
+  --clean-target --top-k 200 --joint-groups kpx_group_1,kpx_group_3
+  --obs-features --baseline-oof ./saved_models/v13/oof_preds.csv
+
+features_summary: >-
+  v13 구성 전부 동일 + ASOS 관측 피처 10개(블록 상수): 기준시점 직전 24h 의
+  풍속 평균/최대/표준편차/최근3h, 풍향 원형평균 sin/cos, 기온, 습도, 기압 24h 변화,
+  그리고 관측−LDAPS 최근 편차(obs_nwp_bias24). 812 -> 822.
+
+notes: >-
+  v20: 외부 관측 데이터 최초 도입. §8.8, step33.
+
+  [왜 이것인가]
+  §3.30: 역대 LB 상승은 전부 정보형. 관측은 NWP 로부터 유도 불가능한 새 정보원이라
+  §3.8 따름정리에 안 걸리는, v13 이후 첫 진짜 신규 정보임. 특히 obs_nwp_bias24
+  (전날 관측 − 전날 LDAPS 예보)는 NWP 의 최근 계통 편차를 행별로 합법 추적함 —
+  드리프트 축(§3.31)이 3전 3패로 닫힌 뒤 남은 유일한 2025-적응 통로.
+
+  [합법성 — 규칙 3·4·유의사항 7]
+  * 규칙 3 실측 조항 명문 허용: "실측 데이터는 예측기준시점 전에 이미 관측·공개·확정된
+    과거 자료에 한해 사용 가능". 각 블록 기준시점(전날 13:00) −1h 까지의 관측만 사용.
+  * 규칙 4: 기상청 API허브 — 무료 가입 키, 공공누리 1유형(상업이용 가능), 재현 코드
+    scripts/step33_download_asos.py (관측소 선정 근거 asos_stations.csv 자동 생성).
+  * 유의사항 7 무관 — 평가 데이터셋이 아니라 외부 관측 파일임.
+  * 블록의 24행이 같은 기준시점을 공유하므로 피처는 블록 상수 — 행별 기준시점 위반 없음.
+  * 경계: 2025-01-01 블록의 편차 계산에 필요한 2024-12-31 LDAPS 값은 학습 꼬리
+    (obs_state.csv, 48h)로 공급. 경계 일치성 0.0e0, 블록 상수성 검증 완료.
+
+  [사전 등록 판정 — §3.30 체제]
+  1. 게이트: raw OOF 연도짝비교 vs v13, §3.6 규칙 6 전체 (정보형 정공 게이트).
+  2. 통과 시에도 §3.30 규칙 1 적용 — v15 전례(정보형 3/3 통과 후 LB −0.0010)를 명시하고
+     제출은 별도 판단. 관측 피처는 v15 와 달리 **원천이 다른 정보**라는 점이 차이.
+  3. 창 24h·관측소 2개·컬럼 10개 하나의 구성만 시험. 격자 탐색 금지.
+
+  [실행 — 선행: API허브 활용신청 후 step33_download_asos.py 로 csv 생성]
+  python scripts/step33_download_asos.py
+  python main/train.py --config configs/config_v20.yaml --clean-target --top-k 200
+      --joint-groups kpx_group_1,kpx_group_3 --obs-features
+      --baseline-oof ./saved_models/v13/oof_preds.csv

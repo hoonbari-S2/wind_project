@@ -109,6 +109,43 @@ def inner_es_split(fdays_tr, frac=0.15, seed=0):
     return ~is_es, is_es
 
 
+# ----------------------------------------------------------------- ES 지표 정렬
+def make_comp_es_metric(cap):
+    """
+    조기종료용 커스텀 지표: **1 − 대회점수** (XGBoost 는 콜러블 지표를 최소화함).
+
+    왜 필요한가 (§0 확인 1 / 2026-07-27)
+      기존 ES 는 config 의 eval_metric(v13/v15: tweedie-nloglik@1.5)으로 멈춘다.
+      tweedie 우도를 최소화하는 트리 수와 0.5(1−NMAE)+0.5·FICR 를 최대화하는
+      트리 수는 같을 이유가 없다. 특히 FICR 은 오차의 '집중도'(±6% 문턱)를 보상하는데
+      nloglik 은 그 축을 아예 보지 않는다. 멈추는 지점이 채점받는 지점과 다르다.
+
+    사용법 — train.py 수정 0줄
+      config 의 model_params.eval_metric 을 문자열 "comp" 로 바꾸면
+      fit_no_leak 이 이 콜러블로 바꿔 끼운다 (configs/config_v16.yaml).
+
+    주의
+      * XGBoost 전용. 다른 모델은 기본 지표로 폴백한다.
+      * 반환값은 1−score (최소화 방향). xgboost>=1.6 sklearn API 는 내장 objective 를
+        쓸 때 콜러블 지표에 **역링크 적용된(응답 스케일) 예측값**을 준다.
+      * 채점행(a >= 0.10cap)이 30개 미만이면 NMAE 로 폴백한다 — ES 셋이 작은
+        폴드에서 계단 지표가 전부 동점이 되는 것을 막는다.
+    """
+    def comp(y_true, y_pred):
+        a = np.asarray(y_true, dtype=float)
+        f = np.clip(np.asarray(y_pred, dtype=float), 0.0, None)
+        ok = np.isfinite(a) & np.isfinite(f)
+        a, f = a[ok], f[ok]
+        if len(a) == 0:
+            return 1.0
+        v = a >= 0.10 * cap
+        if v.sum() < 30:
+            return float(np.abs(f - a).mean() / cap)
+        s, _, _ = group_score(a, f, cap)
+        return float(1.0 - s) if np.isfinite(s) else 1.0
+    return comp
+
+
 # ----------------------------------------------------------------- 모델 래퍼
 def _build(model_type, params):
     if model_type == "XGBoost":
@@ -129,6 +166,23 @@ def _build(model_type, params):
     raise ValueError(f"지원하지 않는 model_type: {model_type}")
 
 
+def _to_cpu_predict(model, model_type):
+    """
+    XGBoost 를 device='cuda' 로 학습하면 예측 때 입력(pandas, CPU)과 부스터(GPU)가
+    어긋나 매번 DMatrix 로 되돌아간다. 경고가 뜨고 예측이 느려진다.
+    학습이 끝난 뒤 부스터를 CPU 로 돌려 불일치 자체를 없앤다.
+    (테스트 8,760행 규모라 CPU 예측으로도 충분히 빠르다)
+    """
+    if model_type != "XGBoost":
+        return model
+    try:
+        model.get_booster().set_param({"device": "cpu"})
+        model.set_params(device="cpu")
+    except Exception:
+        pass
+    return model
+
+
 def _best_iter(model, model_type, fallback):
     try:
         if model_type == "XGBoost":
@@ -145,7 +199,8 @@ def _best_iter(model, model_type, fallback):
 
 
 def fit_no_leak(model_type, params, X_tr, y_tr, fdays_tr,
-                es_rounds=50, es_frac=0.15, mode="refit", seed=0, verbose=False):
+                es_rounds=50, es_frac=0.15, mode="refit", seed=0, verbose=False,
+                sample_weight=None, cap=None):
     """
     누설 없는 학습.
 
@@ -154,37 +209,61 @@ def fit_no_leak(model_type, params, X_tr, y_tr, fdays_tr,
                  '전체'를 다시 학습. 데이터 손실 없음 + 검증셋 미접촉. (권장)
       'inner'  : 내부 ES 셋을 그대로 두고 한 번만 학습 (빠르지만 15% 손실)
       'fixed'  : ES 없이 config 의 n_estimators 그대로
+
+    cap : eval_metric="comp" (대회점수 ES) 일 때 채점 필터에 쓸 설비용량.
+          run_cv / run_cv_joint 가 자동으로 넘긴다.
     """
     p = dict(params)
     n_max = int(p.get("n_estimators", p.get("iterations", 1000)) or 1000)
 
+    # --- eval_metric="comp" 인터셉트 (§0 확인 1) -------------------------
+    # 문자열 "comp" 는 XGBoost 가 모르는 지표라 그대로 두면 죽는다.
+    # 여기서 빼두고, ES 학습(XGBoost)에만 콜러블로 바꿔 끼운다.
+    comp_es = str(p.get("eval_metric", "")).lower() == "comp"
+    if comp_es:
+        p.pop("eval_metric", None)
+        if model_type != "XGBoost":
+            print(f"   ⚠ eval_metric=comp 는 XGBoost 전용 -> {model_type} 은 기본 지표로 폴백")
+            comp_es = False
+        elif cap is None:
+            print("   ⚠ eval_metric=comp 인데 cap 미전달 -> mae 로 폴백")
+            p["eval_metric"] = "mae"
+            comp_es = False
+
+    sw = None if sample_weight is None else np.asarray(sample_weight, dtype=float)
+
     if mode == "fixed":
         m = _build(model_type, p)
-        m.fit(X_tr, y_tr)
-        return m, n_max
+        m.fit(X_tr, y_tr, **({} if sw is None else {"sample_weight": sw}))
+        return _to_cpu_predict(m, model_type), n_max
 
     tr_m, es_m = inner_es_split(fdays_tr, frac=es_frac, seed=seed)
     X_a, y_a = X_tr.iloc[tr_m], y_tr.iloc[tr_m]
     X_e, y_e = X_tr.iloc[es_m], y_tr.iloc[es_m]
+    w_a = None if sw is None else sw[tr_m]
+    w_e = None if sw is None else sw[es_m]
+    kw_a = {} if w_a is None else {"sample_weight": w_a}
 
     p_es = dict(p)
     if model_type == "XGBoost":
         p_es["early_stopping_rounds"] = es_rounds
+        if comp_es:
+            p_es["eval_metric"] = make_comp_es_metric(cap)
         m = _build(model_type, p_es)
-        m.fit(X_a, y_a, eval_set=[(X_e, y_e)], verbose=False)
+        m.fit(X_a, y_a, eval_set=[(X_e, y_e)], verbose=False, **kw_a)
     elif model_type == "LightGBM":
         import lightgbm as lgb
         m = _build(model_type, p_es)
-        m.fit(X_a, y_a, eval_set=[(X_e, y_e)],
+        m.fit(X_a, y_a, eval_set=[(X_e, y_e)], **kw_a,
               callbacks=[lgb.early_stopping(es_rounds, verbose=False), lgb.log_evaluation(0)])
     elif model_type == "CatBoost":
         p_es["early_stopping_rounds"] = es_rounds
         m = _build(model_type, p_es)
-        m.fit(X_a, y_a, eval_set=(X_e, y_e), verbose=False)
+        m.fit(X_a, y_a, eval_set=(X_e, y_e), verbose=False, **kw_a)
     elif model_type == "SklearnGBM":
         # sklearn GBM 은 eval_set 이 없으므로 staged_predict 로 직접 ES 곡선을 만든다
         m = _build(model_type, p_es)
-        m.fit(X_a, y_a)
+        m.fit(X_a, y_a, **kw_a)
         errs = [np.abs(pr - y_e.to_numpy()).mean() for pr in m.staged_predict(X_e)]
         m._es_best_iter = int(np.argmin(errs)) + 1
     else:                                                   # RF/ET 는 ES 개념 없음
@@ -194,7 +273,7 @@ def fit_no_leak(model_type, params, X_tr, y_tr, fdays_tr,
 
     bi = _best_iter(m, model_type, n_max)
     if mode == "inner":
-        return m, bi
+        return _to_cpu_predict(m, model_type), bi
 
     # refit: 데이터가 1/(1-frac) 배로 늘었으니 트리 수도 그만큼 늘려서 전체 재학습
     n_final = int(np.clip(round(bi / (1.0 - es_frac)), 10, n_max))
@@ -205,10 +284,10 @@ def fit_no_leak(model_type, params, X_tr, y_tr, fdays_tr,
     else:
         p_full["n_estimators"] = n_final
     m_full = _build(model_type, p_full)
-    m_full.fit(X_tr, y_tr)
+    m_full.fit(X_tr, y_tr, **({} if sw is None else {"sample_weight": sw}))
     if verbose:
         print(f"      ES best_iter={bi} -> refit n={n_final}")
-    return m_full, n_final
+    return _to_cpu_predict(m_full, model_type), n_final
 
 
 # ----------------------------------------------------------------- 점수
@@ -248,21 +327,64 @@ def total_score(answer_df, pred_df, targets=None):
     return 0.5 * one_minus_nmae + 0.5 * ficr, one_minus_nmae, ficr
 
 
+# --------------------------------------------------- 피처 선택 고정·강제포함
+# [v20b 신설] gain 기준 top-K 선택은 그 자체로 노이즈 원천임.
+#   v20 실측: 풀에 컬럼 10개를 더한 것만으로 (그 10개가 하나도 안 뽑혔는데도)
+#   폴드별 top-200 의 25.6%(평균 51개)가 뒤바뀜. m0 의 colsample RNG 스트림이
+#   밀리기 때문. 그래서 '피처 추가 A/B' 는 선택 절차를 실험에서 빼지 않으면
+#   측정 대상이 아니라 재추첨을 재게 됨 (§3.18 선택 변위의 순수형).
+def _fixed_cols(featcols_from, fname, pool):
+    """이전 런이 저장한 폴드별 피처 목록을 그대로 재사용함. 선택 절차를 상수로 만듦."""
+    if not featcols_from:
+        return None
+    import joblib
+    from pathlib import Path as _Path
+    p = _Path(featcols_from) / fname
+    if not p.exists():
+        raise FileNotFoundError(f"--featcols-from: {p} 없음")
+    saved = list(joblib.load(p))
+    miss = [c for c in saved if c not in set(pool)]
+    if miss:
+        raise ValueError(f"{fname}: 저장된 피처 {len(miss)}개가 현재 풀에 없음 "
+                         f"(예: {miss[:3]}). 같은 피처 파이프라인으로 만든 런인지 확인할 것")
+    return saved
+
+
+def _force_cols(cols, pool, prefixes):
+    """접두사에 해당하는 컬럼을 선택 결과에 무조건 덧붙임.
+    '정보가 없다' 와 '선택에서 떨어졌다' 를 가르는 유일한 방법 (v20 이 후자였음)."""
+    if not prefixes:
+        return cols
+    pre = tuple(prefixes)
+    have = set(cols)
+    return cols + [c for c in pool if c.startswith(pre) and c not in have]
+
+
 # ----------------------------------------------------------------- CV 실행
 def run_cv(df, feature_cols, targets, model_type, model_params,
            scheme="loyo", n_splits=5, es_rounds=50, es_frac=0.15,
            es_mode="refit", seed=42, save_dir=None, verbose=True,
-           predict_all=True):
+           predict_all=True, top_k=None, weight_col=None,
+           featcols_from=None, force_prefix=()):
     """
+    top_k : 정하면 폴드마다 '학습셋 안에서만' 중요도를 구해 상위 K개로 재학습한다.
+            전체 데이터로 피처를 고르면 검증폴드를 본 것이 되어 가짜 이득이 나온다
+            (feature selection leakage). 폴드마다 선택된 피처가 달라도 정상이다.
+
+    featcols_from : 주면 top_k 재선택을 하지 않고 그 디렉토리의 featcols_*.pkl 을 씀.
+                    피처 추가 A/B 에서 선택 절차를 상수로 고정하기 위한 것 (v20b).
+    force_prefix  : 이 접두사를 가진 컬럼은 선택 결과에 무조건 포함시킴.
+
     반환
       oof     : DataFrame (df.index 정렬, 컬럼=targets). 누설 없는 OOF.
       fold_df : fold x target 별 점수표
       models  : {(target, fold_name): model}
+      feats   : {(target, fold_name): 그 폴드가 실제로 쓴 피처 리스트}
     """
     import joblib
     df = add_time_keys(df)
     oof = pd.DataFrame(index=df.index, columns=targets, dtype=float)
-    rows, models = [], {}
+    rows, models, fold_feats = [], {}, {}
 
     for target in targets:
         fit_mask = df[target].notna().to_numpy()          # 학습에 쓸 수 있는 행
@@ -274,6 +396,7 @@ def run_cv(df, feature_cols, targets, model_type, model_params,
         y = sub[target].reset_index(drop=True)
         yrs, fds = sub["_year"].to_numpy(), sub["_fday"].to_numpy()
         sub_fit = fit_mask if predict_all else np.ones(len(sub), bool)
+        w_all = (sub[f"{weight_col}{target}"].to_numpy(float) if weight_col else None)
         cap = CAPACITY_KWH[target]
         folds = make_folds(yrs, fds, scheme=scheme, n_splits=n_splits, seed=seed)
 
@@ -286,19 +409,39 @@ def run_cv(df, feature_cols, targets, model_type, model_params,
             tr_fit = tr[sub_fit[tr]]                       # 타깃이 있는 학습 행만
             if len(tr_fit) < 100:
                 continue
+
+            sw = None if w_all is None else w_all[tr_fit]
+            cols = list(feature_cols)
+            fixed = _fixed_cols(featcols_from, f"featcols_{target}_{name}.pkl", cols)
+            if fixed is not None:                          # 선택 절차를 상수로 고정
+                cols = fixed
+            elif top_k and top_k < len(cols):              # 폴드 학습셋 안에서만 선택
+                m0, _ = fit_no_leak(model_type, model_params,
+                                    X.iloc[tr_fit], y.iloc[tr_fit], fds[tr_fit],
+                                    es_rounds=es_rounds, es_frac=es_frac,
+                                    mode=es_mode, seed=seed, verbose=False,
+                                    sample_weight=sw, cap=cap)
+                imp = np.asarray(m0.feature_importances_, dtype=float)
+                cols = [cols[i] for i in np.argsort(-imp)[:top_k]]
+            cols = _force_cols(cols, feature_cols, force_prefix)
+            fold_feats[(target, name)] = cols
+
+            Xs = X[cols]
             model, n_used = fit_no_leak(model_type, model_params,
-                                        X.iloc[tr_fit], y.iloc[tr_fit], fds[tr_fit],
+                                        Xs.iloc[tr_fit], y.iloc[tr_fit], fds[tr_fit],
                                         es_rounds=es_rounds, es_frac=es_frac,
-                                        mode=es_mode, seed=seed, verbose=False)
-            pred[va] = np.clip(model.predict(X.iloc[va]), 0, cap)
+                                        mode=es_mode, seed=seed, verbose=False,
+                                        sample_weight=sw, cap=cap)
+            pred[va] = np.clip(model.predict(Xs.iloc[va]), 0, cap)
             models[(target, name)] = model
             if save_dir is not None:
                 joblib.dump(model, f"{save_dir}/model_{target}_{name}.pkl")
+                joblib.dump(cols, f"{save_dir}/featcols_{target}_{name}.pkl")
 
             ev = va[sub_fit[va]]                           # 채점은 타깃 있는 행만
             s, one_m, f = group_score(y.iloc[ev].to_numpy(), pred[ev], cap)
             rows.append({"target": target, "fold": name, "n_fit": len(tr_fit),
-                         "n_val": len(ev), "n_trees": n_used,
+                         "n_feat": len(cols), "n_val": len(ev), "n_trees": n_used,
                          "score": s, "one_minus_nmae": one_m, "ficr": f})
             if verbose:
                 print(f"   ├─ {name}: score={s:.4f}  1-NMAE={one_m:.4f}  FICR={f:.4f}  "
@@ -309,7 +452,7 @@ def run_cv(df, feature_cols, targets, model_type, model_params,
         else:
             oof.loc[fit_mask, target] = pred
 
-    return oof, pd.DataFrame(rows), models
+    return oof, pd.DataFrame(rows), models, fold_feats
 
 
 # ----------------------------------------------------------------- 중첩 평가
@@ -436,11 +579,149 @@ def is_difference_real(df, answer_df, pred_a, pred_b, targets=None,
         if verbose:
             print("   연도가 2개 미만이라 유의성 판정 불가")
         return None
-    same_sign = bool(np.all(d > 0) or np.all(d < 0))
+    # 차이가 정확히 0 인 연도는 정보가 없다 (예: 그 해 해당 그룹 라벨이 없어
+    # 구조적으로 0). 0 을 '부호 불일치' 로 세면 멀쩡한 개선이 기각된다.
+    nz = np.abs(d) > 1e-12
+    if nz.sum() >= 2:
+        same_sign = bool(np.all(d[nz] > 0) or np.all(d[nz] < 0))
+    else:
+        same_sign = bool(np.all(d[nz] > 0) or np.all(d[nz] < 0)) if nz.sum() else False
     real = same_sign and abs(d.mean()) > d.std(ddof=1)
     if verbose:
         det = "  ".join(f"{k}:{v:+.4f}" for k, v in diffs.items())
         print(f"   {name_a} - {name_b}: 평균 {d.mean():+.4f}  연도별[{det}]")
+        zn = int((~nz).sum())
+        extra = f", 차이 0인 연도 {zn}개 제외" if zn else ""
         print(f"   판정: {'✅ 신호로 볼 만함' if real else '⚠️  노이즈 범위 — 제출 낭비 말 것'}"
-              f"  (부호일치={same_sign}, |평균|={abs(d.mean()):.4f} vs 표준편차={d.std(ddof=1):.4f})")
+              f"  (부호일치={same_sign}{extra}, |평균|={abs(d.mean()):.4f} "
+              f"vs 표준편차={d.std(ddof=1):.4f})")
     return {"diffs": diffs, "mean": float(d.mean()), "std": float(d.std(ddof=1)), "real": real}
+
+
+# ----------------------------------------------------------------- 경고 정리
+def quiet_warnings(all_user=False):
+    """
+    학습 로그를 읽기 좋게. 스크립트 맨 위에서 한 번만 호출한다.
+    라이브러리가 전역으로 경고를 끄는 건 나쁜 습관이라 함수로 분리했다.
+
+    all_user=False : 이미 원인을 아는 것만 선택적으로 끈다 (권장)
+    all_user=True  : UserWarning 전부. 새 문제도 같이 묻히므로 임시로만.
+    """
+    import warnings
+    pats = [".*mismatched devices.*", ".*Falling back to prediction using DMatrix.*",
+            ".*is highly fragmented.*", ".*all arguments of .* will be keyword-only.*",
+            ".*Starting with pandas version.*", ".*are not used.*"]
+    for p_ in pats:
+        warnings.filterwarnings("ignore", message=p_)
+    warnings.filterwarnings("ignore", category=FutureWarning)
+    if all_user:
+        warnings.filterwarnings("ignore", category=UserWarning)
+
+
+# ----------------------------------------------------------------- 3그룹 통합 학습
+GROUP_SPEC = {
+    "kpx_group_1": dict(gid=0, is_vestas=1, n_turb=6, rotor_d=126.0),
+    "kpx_group_2": dict(gid=1, is_vestas=1, n_turb=6, rotor_d=126.0),
+    "kpx_group_3": dict(gid=2, is_vestas=0, n_turb=5, rotor_d=136.0),
+}
+CREF = 21600.0          # 통합 학습의 공통 타깃 스케일
+
+
+def build_long(df, feature_cols, targets, weight_col=None):
+    """행 = 시각 × 그룹. 그룹 구분은 one-hot + 정적 스펙으로만 준다."""
+    parts = []
+    for g in targets:
+        sp = GROUP_SPEC[g]
+        d = df[feature_cols].astype(np.float32).copy()
+        for k in range(3):
+            d[f"grp_{k}"] = np.float32(1.0 if sp["gid"] == k else 0.0)
+        d["grp_is_vestas"] = np.float32(sp["is_vestas"])
+        d["grp_n_turb"] = np.float32(sp["n_turb"])
+        d["grp_rotor_d"] = np.float32(sp["rotor_d"])
+        d["_y"] = df[g].to_numpy(float)
+        d["_w"] = (df[f"{weight_col}{g}"].to_numpy(float)
+                   if weight_col else np.ones(len(df), dtype=float))
+        d["_year"] = df["_year"].to_numpy()
+        d["_fday"] = df["_fday"].to_numpy()
+        d["_gname"] = g
+        d["_row"] = np.arange(len(df))
+        parts.append(d)
+    return pd.concat(parts, ignore_index=True)
+
+
+def run_cv_joint(df, feature_cols, targets, model_type, model_params,
+                 scheme="loyo", es_rounds=50, es_frac=0.15, es_mode="refit",
+                 seed=42, save_dir=None, verbose=True, top_k=None, weight_col=None,
+                 featcols_from=None, force_prefix=(), fold_feature_fn=None):
+    """
+    long-format 통합 모델 1개를 LOYO 로 학습한다.
+    라벨이 적은 그룹(G3: 17,538행 vs 26,200행)이 나머지에서 관계를 빌려온다.
+    반환: (oof DataFrame, {fold: model}, {fold: 사용 피처})
+
+    fold_feature_fn : fn(long_df, train_mask, fold_name) -> DataFrame(추가 컬럼).
+        **폴드 학습 행만 보고** 만든 피처를 그 폴드에서만 쓴다 (A-4 격자 가중, v21).
+        폴드마다 다시 부르므로 선택 누설이 없음 (§3.3 과 같은 원칙).
+    """
+    import joblib
+    df = add_time_keys(df)
+    long = build_long(df, feature_cols, targets, weight_col=weight_col)
+    lfeats = [c for c in long.columns if not c.startswith("_")]
+    fm = np.isfinite(long["_y"].to_numpy())
+    Xl, yl = long[lfeats], long["_y"]
+    lyr, lfd = long["_year"].to_numpy(), long["_fday"].to_numpy()
+    wl = long["_w"].to_numpy(float) if weight_col else None
+
+    if verbose:
+        print(f"\n🔗 통합 학습: long {len(long):,}행 × {len(lfeats)}피처 "
+              f"(그룹 one-hot 3 + 정적 3 포함)")
+
+    pred = np.full(len(long), np.nan)
+    models, feats_used = {}, {}
+    for tr, va, name in make_folds(lyr, lfd, scheme=scheme, seed=seed):
+        trf = tr[fm[tr]]
+        sw = None if wl is None else wl[trf]
+
+        # 폴드 전용 피처 (학습 행만 보고 만든다). Xf/pool 이 이 폴드의 유효 풀임.
+        Xf, pool = Xl, lfeats
+        if fold_feature_fn is not None:
+            tmask = np.zeros(len(long), dtype=bool)
+            tmask[trf] = True
+            extra = fold_feature_fn(long, tmask, name)
+            dup = [c for c in extra.columns if c in set(lfeats)]
+            if dup:
+                raise ValueError(f"fold_feature_fn 이 기존 컬럼과 충돌: {dup}")
+            Xf = pd.concat([Xl, extra], axis=1)
+            pool = lfeats + list(extra.columns)
+
+        cols = list(pool)
+        fixed = _fixed_cols(featcols_from, f"featcols_joint_{name}.pkl", cols)
+        if fixed is not None:                              # 선택 절차를 상수로 고정
+            cols = fixed
+        elif top_k and top_k < len(cols):
+            m0, _ = fit_no_leak(model_type, model_params, Xf.iloc[trf], yl.iloc[trf],
+                                lfd[trf], es_rounds=es_rounds, es_frac=es_frac,
+                                mode=es_mode, seed=seed, sample_weight=sw, cap=CREF)
+            imp = np.asarray(m0.feature_importances_, dtype=float)
+            cols = [cols[i] for i in np.argsort(-imp)[:top_k]]
+        cols = _force_cols(cols, pool, force_prefix)
+        feats_used[name] = cols
+        m, n_used = fit_no_leak(model_type, model_params, Xf[cols].iloc[trf],
+                                yl.iloc[trf], lfd[trf], es_rounds=es_rounds,
+                                es_frac=es_frac, mode=es_mode, seed=seed,
+                                sample_weight=sw, cap=CREF)
+        pred[va] = np.clip(m.predict(Xf[cols].iloc[va]), 0, 1.15 * CREF)
+        models[name] = m
+        if save_dir is not None:
+            joblib.dump(m, f"{save_dir}/model_joint_{name}.pkl")
+            joblib.dump(cols, f"{save_dir}/featcols_joint_{name}.pkl")
+        if verbose:
+            print(f"   ├─ {name}: fit {len(trf):,}행 / {len(cols)}피처 / trees {n_used}")
+
+    long["_p"] = pred
+    oof = pd.DataFrame(index=df.index, columns=targets, dtype=float)
+    for g in targets:
+        sub = long[long["_gname"] == g]
+        v = np.full(len(df), np.nan)
+        v[sub["_row"].to_numpy()] = sub["_p"].to_numpy()
+        oof[g] = v
+    return oof, models, feats_used

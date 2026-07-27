@@ -1,0 +1,108 @@
+# configs/config_v21.yaml
+# v13 대비 변경: **A-4 격자 가중** — 통합 경로에 폴드별·그룹별 NNLS 가중 풍속 3컬럼 추가.
+# 그 외 전부 v13 과 동일. 독립 경로(G2)는 손대지 않음 = 무손상 대조군.
+version: v21
+seed: 42
+n_splits: 5
+
+targets: [kpx_group_1, kpx_group_2, kpx_group_3]
+capacity_kwh:
+  kpx_group_1: 21600
+  kpx_group_2: 21600
+  kpx_group_3: 21000
+
+data_paths:
+  train_dir: ./train
+  test_dir: ./test
+  save_model_dir: ./saved_models/v21
+  submission_dir: ./submissions
+
+model_type: XGBoost
+
+model_params:
+  objective: "reg:tweedie"
+  tweedie_variance_power: 1.5
+  eval_metric: "tweedie-nloglik@1.5"
+  tree_method: "hist"
+  device: "cuda:0"
+  n_estimators: 1000
+  learning_rate: 0.03
+  max_depth: 6
+  subsample: 0.8
+  colsample_bytree: 0.8
+  random_state: 42
+  early_stopping_rounds: 30
+
+early_stopping_rounds: 30
+
+run_args: >-
+  --clean-target --joint-groups kpx_group_1,kpx_group_3 --wgrid
+  --featcols-from ./saved_models/v13 --force-prefix wgrid_
+  --baseline-oof ./saved_models/v13/oof_preds.csv
+
+features_summary: >-
+  독립 경로: v13 의 폴드별 200개 그대로 (변경 0 — G2 는 v13 과 비트 단위로 같아야 함).
+  통합 경로: v13 의 폴드별 200개 + wgrid_ws / wgrid_u / wgrid_v = 203개.
+  가중치는 각 폴드 학습 행에서만 NNLS 로 산출(그룹별 16격자, 합 1, 비음수).
+
+notes: >-
+  v21: A-4 격자 가중. §8.3 A-4, §3.4, §4.4, §3.20.
+
+  [원안을 수정한 근거 — 착수 전 §3.17 규칙대로 기존 선택 결과를 조회함]
+  §8.3 은 "현재 `ldaps_mean_*`(16격자 균등평균) 하나로 세 그룹을 전부 대표함" 을 전제로
+  '균등평균을 데이터 기반 가중평균으로 대체' 하는 안이었음. 그런데 v13 이 폴드별 top-200 에서
+  실제로 고른 것을 세 보니 전제가 사실과 달랐음 (11폴드 평균):
+
+      ldaps_mean_*        3.9개 / 24개 중   <- A-4 가 고치려던 대상
+      gfs_mean_*          9.3개
+      LDAPS 개별 격자    83.1개            <- 모델이 실제로 쓰는 것
+      GFS  개별 격자     85.8개
+
+  선택기는 §3.4 의 "개별 격자 > `_mean_`" 을 이미 실행하고 있었고 균등평균은 거의 버려져
+  있었음. 대체형으로는 폴드당 3.9컬럼만 바뀌어 '음수가 나와도 해석이 안 되는' 실험이 됨.
+  => 대체가 아니라 **명시적 3컬럼 추가**로 바꿈.
+
+  [무엇을 묻는가]
+  §4.4 실측은 여전히 유효함 — 동일 시각 10m U성분이 G1 5.378 / G3 6.072 / 균등평균 5.298 로
+  그룹 간 실제 차이 13%를 버리는 중. 모델이 그룹별 가중 풍속을 스스로 만들려면
+  `w1·g1 + ... + w16·g16` 을 **그룹 조건부**로 학습해야 하고, 이는 선형결합 × 상호작용이라
+  §3.2 가 "트리가 공짜로 못 얻는 것" 으로 지목한 형태임. 그것만 3컬럼으로 준다.
+  통합 경로는 행이 (시각 × 그룹)이라 그룹마다 다른 값을 넣을 수 있음.
+
+  [누설 차단]
+  가중치는 각 LOYO 폴드의 **학습 행에서만** NNLS 로 적합함 (§3.3 의 폴드 내 선택과 같은 원칙).
+  폴드마다 다시 적합하므로 검증 연도를 본 적이 없음. 16파라미터 / 학습행 8.6k~17k.
+
+  [사전 등록 판정 — 결과 보기 전에 고정]
+  0. **무결성 확인 (판정보다 먼저).** G2 는 독립 경로라 아무것도 안 바뀜.
+     **compare_oof 의 group_2 Δ 가 정확히 0.0000 이어야 함.** 0 이 아니면 어딘가 샌 것이므로
+     판정을 중단하고 원인부터 찾음.
+  1. 게이트: raw OOF 연도짝비교 vs v13. §3.6 규칙 6 네 조건 전부
+     (부호 3/3 일치 ∧ 부호 양수 ∧ |평균| > 표준편차 ∧ 그룹 2개 이상 양수).
+     ⚠ 이 실험은 G1·G3 만 움직이므로 '그룹 2개 이상' 은 사실상 **G1·G3 둘 다 양수**를 뜻함.
+  2. **방향 예측 (§3.20 사전 예측 승계)**: 효과는 **G3 에서 최대**여야 함.
+     G3 는 공간 범위가 G1 의 1.7배라 균등평균의 오차를 가장 크게 받기 때문임.
+     G1 > G3 로 나오면 기전이 다른 것이므로 **채택하더라도 §3.20 해석을 다시 씀.**
+  3. `[분기]` 게이트 미달이면 **A-4 축 종결.** 가중치 산출 방식(NNLS→상관→gain)이나
+     변수(10m→50m)를 바꿔 가며 재시도하지 않음. 그것이 §9 에 반복 기록된 사후선택임.
+  4. 부수 진단(판정 기준 아님): 폴드별 가중치가 균등(1/16)에서 얼마나 떨어졌는지,
+     그리고 203개 중 wgrid_ 3컬럼의 gain 비중. 가중치가 균등에 가까우면 애초에 잴 것이 없었음.
+  5. **게이트 통과 ≠ 제출** (§3.30 규칙 1). v15 전례 — 정보형·raw OOF 3/3 통과 후 LB −0.0010.
+
+  [v20b 와 같은 함정인지 — 사전 점검]
+  v20b 는 강제 포함한 피처가 **블록 상수**(24행 동일값)라 날짜 식별자로 작동한 것이
+  폐기 원인 가설이었음(§3.32). wgrid_* 는 시각마다 값이 변하는 물리량이고 이미 선택된
+  격자 컬럼들의 선형결합이라 기전이 다름. 다만 '강제 포함' 절차는 같으므로 분기 3 을 둠.
+
+  [추론 경로 — 아직 안 만듦]
+  게이트 통과 후에 만든다. 폴드별 가중치를 저장해 test 에 적용하는 경로가 필요한데,
+  미달이면 버릴 코드이므로 미리 쓰지 않음 (v16·v18·v19 와 같은 처리).
+
+  [실행]
+  python main/train.py --config configs/config_v21.yaml --clean-target
+      --joint-groups kpx_group_1,kpx_group_3 --wgrid
+      --featcols-from ./saved_models/v13 --force-prefix wgrid_
+      --baseline-oof ./saved_models/v13/oof_preds.csv
+
+  정상 출력 확인선: `🌿 폴드별 피처 실제 [200, 203]개`
+  (독립 200 = v13 그대로 / 통합 203 = v13 200 + wgrid 3)

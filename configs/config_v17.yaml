@@ -1,0 +1,68 @@
+# configs/config_v17.yaml
+# v13 대비 변경: **손실함수 하나만** 교체. reg:tweedie -> reg:quantileerror (분위 5개 동시 학습,
+# 점예측은 중앙값 q50). 데이터·정제 타깃·폴드·피처(v13 의 featcols pkl 재사용)·통합 구성·후처리
+# 방식 전부 v13 과 동일함 (§3.5 단일 변경 원칙).
+# 학습·평가·제출은 train.py 가 아니라 scripts/step30_quantile_utility.py 가 수행함
+# (분위 예측이 (n,5) 행렬이라 run_cv 를 못 씀).
+version: v17
+seed: 42
+n_splits: 5
+
+targets: [kpx_group_1, kpx_group_2, kpx_group_3]
+capacity_kwh:
+  kpx_group_1: 21600
+  kpx_group_2: 21600
+  kpx_group_3: 21000
+
+data_paths:
+  train_dir: ./train
+  test_dir: ./test
+  save_model_dir: ./saved_models/v17
+  submission_dir: ./submissions
+
+model_type: XGBoost
+
+model_params:
+  objective: "reg:quantileerror"
+  quantile_alpha: [0.05, 0.25, 0.50, 0.75, 0.95]
+  tree_method: "hist"
+  device: "cuda:0"
+  n_estimators: 1000
+  learning_rate: 0.03
+  max_depth: 6
+  subsample: 0.8
+  colsample_bytree: 0.8
+  random_state: 42
+  early_stopping_rounds: 30
+
+early_stopping_rounds: 30
+
+run_args: >-
+  python scripts/step30_quantile_utility.py --config configs/config_v17.yaml
+  (제출: --skip-train --make-submission --submit-kind median)
+
+features_summary: >-
+  v13 구성 전부 동일(정제 타깃 + G1·G3 통합 + G2 독립 + piecewise 후처리).
+  피처는 v13 이 저장한 폴드별 featcols_*.pkl 을 그대로 재사용(top-k 재선택 없음).
+  바뀐 것은 손실함수뿐: tweedie -> 분위회귀(5분위), 점예측 = q50.
+
+notes: >-
+  v17: 손실 정렬 2차 시도 — v14(L+W)의 교란 분리판. §3.29.
+
+  [배경]
+  step9 요인설계에서 목적함수 주효과 L−T = +0.0137 이었으나, 이를 채택한 v14 는
+  가중 W 와 함께 갔고 LB 에서 −0.0120 으로 역전됨(§3.10). L 단독은 LB 미검증이었음.
+  step28/§3.25 가 "같은 정확도에서 FICR 이 더 나오는 팀이 실재함(+0.013~0.022)" 을
+  관측해 이 축을 재개함.
+
+  [OOF 측정 — 2026-07-27, step30]
+  q50 raw − v13 raw = +0.0131 [2022 +0.0093 / 2023 +0.0136 / 2024 +0.0163], 비율 3.6.
+  내역: 1−NMAE +0.0007 / FICR +0.0239 — 정확도 그대로, 오차 중심만 뾰족해짐.
+  step9 의 L 주효과(+0.0137)와 일치. 기대효용 배치(placed)는 −0.0115 로 기각(§3.29,
+  정지 왼꼬리 부재 진단 — 재시험은 --mix-avail).
+
+  [사전 등록 판정]
+  제출물 = q50 + 표준 piecewise 후처리(OOF 전체 적합, train.py 배포 관례와 동일).
+  이 제출은 "밴드형 raw 이득이 LB 로 전이되는가(§3.10 미해결)" 의 교란 분리 시험을 겸함.
+  기대범위: +0.003~+0.005 (정산구간형 전이율 25%) ~ −0.010 (v14 식 역전).
+  결과가 어느 쪽이든 §3.10 에 답 하나가 기록됨.

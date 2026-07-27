@@ -1,0 +1,72 @@
+# configs/config_v16.yaml
+# v13 대비 변경: **조기종료 지표를 대회 점수로 정렬** (eval_metric: comp). 그 외 전부 동일.
+#   패치된 src/validation.py 가 "comp" 를 인터셉트해 콜러블 지표로 바꿔 낀다.
+#   train.py 수정 0줄.
+version: v16
+seed: 42
+n_splits: 5
+
+targets: [kpx_group_1, kpx_group_2, kpx_group_3]
+capacity_kwh:
+  kpx_group_1: 21600
+  kpx_group_2: 21600
+  kpx_group_3: 21000
+
+data_paths:
+  train_dir: ./train
+  test_dir: ./test
+  save_model_dir: ./saved_models/v16          # ← v13 덮어쓰지 않게
+  submission_dir: ./submissions
+
+model_type: XGBoost
+
+model_params:
+  objective: "reg:tweedie"
+  tweedie_variance_power: 1.5
+  eval_metric: "comp"                          # ← 유일한 변경. 1−(0.5(1−NMAE)+0.5·FICR) 최소화
+  tree_method: "hist"
+  device: "cuda:0"
+  n_estimators: 1000
+  learning_rate: 0.03
+  max_depth: 6
+  subsample: 0.8
+  colsample_bytree: 0.8
+  random_state: 42
+  early_stopping_rounds: 30
+
+early_stopping_rounds: 30
+
+run_args: "--clean-target --top-k 200 --joint-groups kpx_group_1,kpx_group_3"
+
+features_summary: >-
+  v13 구성 전부 동일(정제 타깃 + 폴드별 top200 + G1·G3 통합 + piecewise 후처리).
+  피처·목적함수·가중 전부 그대로. 바뀐 것은 조기종료 지표 하나뿐임 (§3.5 단일 변경 원칙).
+
+notes: >-
+  v16: 조기종료 지표 정렬. §0 확인 1 (2026-07-27).
+
+  [문제]
+  기존 ES 는 tweedie-nloglik@1.5 로 멈춘다 (v13/v15. v14 는 mae).
+  tweedie 우도를 최소화하는 트리 수와 0.5(1-NMAE)+0.5*FICR 를 최대화하는 트리 수는
+  같을 이유가 없다. FICR 은 오차의 '집중도'(6%/8% 문턱)를 보상하는데 nloglik 은
+  그 축을 보지 않는다. 부스팅이 진행될수록 예측 산포가 조여지므로 대회점수 최적
+  트리 수가 nloglik 최적보다 **뒤에** 있을 가설. 학습 로그의 ES best_iter 가
+  v13 대비 커지는지가 기전 확인 지표다.
+
+  [분류 -- 이 변화는 어느 전이율 계급인가]
+  하이퍼파라미터 조정과 달리 '학습 문제를 산식에 정렬' 하는 계열(v14 와 같은 축)이나,
+  실질 효과는 트리 수 선택이므로 정규화형(전이율 26%)에 가깝게 나올 수도 있다.
+  raw OOF 짝비교가 크게 뜨더라도 LB 기대치는 보수적으로 잡을 것.
+
+  [사전 등록 판정 -- 결과 보기 전 고정]
+  1. 게이트: raw OOF 연도짝비교 vs v13 (compare_oof.py).
+     부호 3/3 일치 AND 양수 AND |평균| > 표준편차 AND 그룹 2개 이상 양수 (§3.6 규칙 6).
+  2. 게이트 통과 시에만 제출. 미달이면 '조기종료는 이미 포화' 로 기록하고 축 종결.
+  3. 판정 불가(부호 갈림)면 제출하지 않되, ES best_iter 변화량은 기록해 둔다 --
+     v17(분위회귀 B-2b)의 트리 수 상한을 정할 때 참고 자료가 된다.
+
+  [실행]
+  python main/train.py --config configs/config_v16.yaml \
+      --clean-target --top-k 200 --joint-groups kpx_group_1,kpx_group_3
+  python scripts/compare_oof.py --config configs/config_v13.yaml \
+      --a ./saved_models/v16 --b ./saved_models/v13

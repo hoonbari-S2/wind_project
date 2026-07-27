@@ -30,6 +30,9 @@ import yaml
 
 from src.features import build_full_feature_pipeline
 from src.postprocessing import apply_postprocessing
+from src.features_grid import attach as attach_grid, marker_enabled   # ← 추가
+from src.features_anom import attach_test as attach_anom_test, marker_enabled as anom_enabled
+from src.features_obs import attach_test as attach_obs_test, marker_enabled as obs_enabled
 
 
 def process_weather_data(df, prefix):
@@ -100,10 +103,24 @@ def main():
 
     print("🚀 피처 생성 중...")
     X = build_full_feature_pipeline(test_df).replace([np.inf, -np.inf], np.nan)
+    if marker_enabled(model_dir):                             # ← 추가 3줄
+        print("🗺️  격자 산포 피처 활성 (학습 시 사용됨)")
+        X = attach_grid(X, ldaps, gfs)
+    if anom_enabled(model_dir):                               # ← 추가 (step32)
+        print("🌊 후행편차 피처 활성 — 학습 꼬리(anom_state.csv)를 이어붙여 계산")
+        X = attach_anom_test(X, model_dir)
+    if obs_enabled(model_dir):                                # ← 추가 (step33)
+        print("📡 관측 피처 활성 — ASOS csv + 학습 꼬리(obs_state.csv)로 계산")
+        X = attach_obs_test(X, model_dir, "./data/external/asos_hourly.csv")
     X = X.reindex(columns=feature_cols)
     missing = X.columns[X.isna().all()].tolist()
     if missing:
         print(f"   ⚠️ 학습에는 있었는데 테스트에서 전부 NaN 인 피처 {len(missing)}개: {missing[:8]}...")
+
+    jg_path = model_dir / "joint_groups.json"
+    joint_groups = json.load(open(jg_path)) if jg_path.exists() else []
+    if joint_groups:
+        print(f"🔗 통합 모델 그룹: {', '.join(joint_groups)}")
 
     scale_path = model_dir / "target_scale.json"
     scale = json.load(open(scale_path)) if scale_path.exists() else None
@@ -111,8 +128,36 @@ def main():
         print("🧹 정제 타깃 모델 감지 — 가용률 보정 예측에 k×평균가용률을 곱해 실제 kWh 로 환산: "
               + ", ".join(f"{k}={v:.4f}" for k, v in scale.items()))
 
+    from src.validation import GROUP_SPEC, CREF
+
+    def joint_X(base_X, target):
+        """통합 모델 입력: 피처 + 그룹 one-hot + 정적 스펙"""
+        sp = GROUP_SPEC[target]
+        d = base_X.astype(np.float32).copy()
+        for k in range(3):
+            d[f"grp_{k}"] = np.float32(1.0 if sp["gid"] == k else 0.0)
+        d["grp_is_vestas"] = np.float32(sp["is_vestas"])
+        d["grp_n_turb"] = np.float32(sp["n_turb"])
+        d["grp_rotor_d"] = np.float32(sp["rotor_d"])
+        return d
+
     submission = sample[["forecast_id", "forecast_kst_dtm"]].copy()
     for target in targets:
+        if target in joint_groups:
+            jp = sorted(model_dir.glob("model_joint_*.pkl"))
+            if not jp:
+                raise FileNotFoundError(f"{model_dir} 에 model_joint_*.pkl 이 없다.")
+            cap = config["capacity_kwh"][target]
+            Xj = joint_X(X, target)
+            preds = np.zeros(len(X))
+            for p in jp:
+                fold = p.stem.split("_")[-1]
+                fc = model_dir / f"featcols_joint_{fold}.pkl"
+                Xi = Xj[joblib.load(fc)] if fc.exists() else Xj
+                preds += np.clip(joblib.load(p).predict(Xi), 0, 1.15 * CREF) / len(jp)
+            submission[target] = np.clip(preds * (scale[target] if scale else 1.0), 0, cap)
+            print(f"🔗 {target}: 통합 모델 {len(jp)}개 평균")
+            continue
         paths = sorted(model_dir.glob(f"model_{target}_*.pkl"))
         if not paths:
             raise FileNotFoundError(f"{model_dir} 에 model_{target}_*.pkl 이 없습니다. 먼저 학습하세요.")
@@ -120,11 +165,18 @@ def main():
         ub = 1.15 * cap if scale else cap                # 가용률 보정 타깃은 cap 을 넘을 수 있다
         preds = np.zeros(len(X))
         for p in paths:
-            preds += np.clip(joblib.load(p).predict(X), 0, ub) / len(paths)
+            fold = p.stem.split("_")[-1]
+            fc = model_dir / f"featcols_{target}_{fold}.pkl"
+            Xi = X[joblib.load(fc)] if fc.exists() else X      # 가지치기 모델은 폴드별 피처
+            preds += np.clip(joblib.load(p).predict(Xi), 0, ub) / len(paths)
         if scale:
             preds = preds * scale[target]
         submission[target] = np.clip(preds, 0, cap)
-        print(f"🔮 {target}: fold 모델 {len(paths)}개 평균  ({', '.join(p.stem.split('_')[-1] for p in paths)})")
+        nfe = [len(joblib.load(model_dir / f"featcols_{target}_{p.stem.split('_')[-1]}.pkl"))
+               for p in paths if (model_dir / f"featcols_{target}_{p.stem.split('_')[-1]}.pkl").exists()]
+        extra = f", 피처 {sorted(set(nfe))}개" if nfe else ""
+        print(f"🔮 {target}: fold 모델 {len(paths)}개 평균  "
+              f"({', '.join(p.stem.split('_')[-1] for p in paths)}{extra})")
 
     raw_path = model_dir / "raw_test_preds.csv"
     submission.to_csv(raw_path, index=False)
@@ -139,7 +191,10 @@ def main():
             print("⚠️ post_params.pkl 없음 — raw 유지")
 
     submission["forecast_kst_dtm"] = submission["forecast_kst_dtm"].dt.strftime("%Y-%m-%d %H:%M:%S")
-    out = sub_dir / f"submit_{config.get('version','v11')}.csv"
+    # 후처리 없는 제출은 같은 버전의 '변형' 이다. 새 버전이 아니라 접미사로 구분한다
+    # (덮어쓰면 v14 본편 제출물이 사라져서 나중에 둘을 비교할 수 없다).
+    suffix = "_no_post" if args.no_post else ""
+    out = sub_dir / f"submit_{config.get('version','v11')}{suffix}.csv"
     submission.to_csv(out, index=False, encoding="utf-8-sig")
     print(f"\n🚀 제출 파일 저장: {out}")
 

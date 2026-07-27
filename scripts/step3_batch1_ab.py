@@ -149,7 +149,7 @@ def main():
     oofs = {}
     for name, d, f in [("A 기존피처", df_a, fa), ("B +배치1", df_b, fb)]:
         print(BAR); print(f"STEP 3/5  {name} 학습")
-        o, _, _, _ = run_cv(d, f, targets, **common)
+        o, _, _ = run_cv(d, f, targets, **common)
         if scale is not None:
             for g in targets:
                 o[g] = np.clip(o[g] * scale[g], 0, CAPACITY_KWH[g])

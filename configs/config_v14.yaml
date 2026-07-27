@@ -1,0 +1,112 @@
+# configs/config_v14.yaml
+# v13 대비 변경: 학습 목적함수와 표본가중을 대회 산식에 정렬.
+#   objective  reg:tweedie(p=1.5) -> reg:absoluteerror
+#   sample_weight  균일 -> 산식정합 가중(FICR 구조 이식)
+# 구성(정제타깃 / top200 / G1·G3 통합 + G2 독립)은 v13 그대로 고정.
+version: v14
+seed: 42
+n_splits: 5
+
+targets: [kpx_group_1, kpx_group_2, kpx_group_3]
+capacity_kwh:
+  kpx_group_1: 21600
+  kpx_group_2: 21600
+  kpx_group_3: 21000
+
+data_paths:
+  train_dir: ./train
+  test_dir: ./test
+  save_model_dir: ./saved_models/v14
+  submission_dir: ./submissions
+
+model_type: XGBoost
+
+# objective / eval_metric 은 train.py 의 --objective mae 가 덮어쓴다.
+# yaml 에도 최종 상태를 적어두어 재현 시 혼동이 없게 한다.
+model_params:
+  objective: "reg:absoluteerror"
+  eval_metric: "mae"
+  tree_method: "hist"
+  device: "cuda:0"
+  n_estimators: 1000
+  learning_rate: 0.03
+  max_depth: 6
+  subsample: 0.8
+  colsample_bytree: 0.8
+  random_state: 42
+  early_stopping_rounds: 30
+
+early_stopping_rounds: 30
+
+run_args: "--clean-target --top-k 200 --joint-groups kpx_group_1,kpx_group_3 --objective mae --sample-weight ficr"
+
+features_summary: >-
+  v13 구성 전부 유지(v6 물리/도메인 피처 + SCADA 가동률 보정 정제 타깃 + 폴드별 top200
+  가지치기 + G1·G3 long-format 통합 학습 + piecewise 단조 후처리).
+  피처는 한 개도 추가/삭제하지 않았다. 바뀐 것은 학습 목적함수와 표본가중뿐이다.
+
+notes: >-
+  v14: 학습 문제를 평가 산식에 정렬한다. §3.9 에서 정리한 규칙 — '성공한 변화는 전부
+  학습 문제를 바꾼 것, 실패한 변화는 전부 NWP 로부터 유도 가능한 양을 다시 계산한 것' —
+  의 직접적 귀결. 아직 안 건드린 마지막 '학습 문제' 가 목적함수였다.
+
+  [문제 정의]
+  학습 목적함수는 reg:tweedie(p=1.5) = 로그우도, 대회 목적함수는 0.5*(1-NMAE)+0.5*FICR.
+  둘은 무관하다. 특히 두 가지를 무시하고 있었다.
+    (1) NMAE 는 용량정규화 L1 이다. 그룹 안에서 capacity 는 상수이므로
+        '그룹별 MAE 최소화' = 'NMAE 최소화' 가 정확히 성립한다. Tweedie 는 L1 이 아니고,
+        로그링크라 상대오차 기준이다. 점수가 사는 고발전 구간에서 정렬이 반대다.
+    (2) FICR 은 발전량 가중(earned = sum(actual*price))이고 채점 자체가
+        actual >= 0.10*cap 인 행에서만 일어난다. 채점행 비율은 G1 60.7% / G2 60.7% /
+        G3 53.7%. 나머지 약 40% 는 뭘 찍든 점수에 안 들어가는데 동등한 무게로 학습했다.
+
+  [Tweedie 선택의 재검토 — 틀린 판단은 아니었다]
+  v6 에서 Tweedie 를 고른 근거는 원본 라벨의 0점 질량(G1 11.45% / G2 11.42% / G3 16.23%)
+  이었고, 그 시점에는 정확한 판단이었다. 그 뒤 두 가지가 바뀌었다.
+    - v11 부터 학습 타깃이 원본 라벨이 아니라 정제 타깃(cf*21600)이다. G3 의 0점 비율이
+      혼자 높은 것은 가동률 문제였고(step1: G3 가 100% 가동인 시간이 56.3%), 정제 타깃이
+      정확히 그것을 걷어냈다. Tweedie 를 정당화하던 0점 질량 자체가 줄어 있다.
+    - 0점 질량은 전부 10%cap 선 아래, 즉 채점 대상 밖이다. Tweedie 는 점수에 들어가지
+      않는 영역의 분포적합을 위해 존재하고 있었다.
+
+  [step9 — 2x2 요인설계 (목적함수 T/L x 가중 U/W), raw OOF]
+    A T+U(현행 v13)  G1 0.6014 / G2 0.6076 / G3 0.5760 -> 0.5950
+    B T+W            G1 0.6191 / G2 0.6213 / G3 0.5844 -> 0.6083
+    C L+U            G1 0.6149 / G2 0.6313 / G3 0.5844 -> 0.6102
+    D L+W            G1 0.6272 / G2 0.6442 / G3 0.5902 -> 0.6205   <- 채택
+  요인 분해: 목적함수 주효과(L-T) +0.0137 / 가중 주효과(W-U) +0.0118 / 상호작용 -0.0015.
+  상호작용이 사실상 0 이라 두 효과는 독립·가산적이다. 둘 다 채택하는 것이 옳다.
+  이는 4개 중 최고를 고른 것이 아니라 요인별 주효과 판정이다.
+
+  D - A 연도짝비교 +0.0260 [2022 +0.0191 / 2023 +0.0274 / 2024 +0.0316], 3/3 일관.
+  그룹x연도 8칸 중 7칸 양수, 나머지 1칸(G1 2022)은 -0.0005 로 사실상 0.
+  지금까지 측정한 어떤 변화보다 크고 일관된 효과다.
+
+  [작동 기전 — 이득의 96%가 FICR 이다]
+  A: 1-NMAE 0.8627 / FICR 0.3273  ->  D: 1-NMAE 0.8649 / FICR 0.3762
+  NMAE 기여 +0.0011, FICR 기여 +0.0245. MAE 로 바꾸면 NMAE 가 좋아질 거라 예상했는데
+  실제로 좋아진 건 FICR 이었다. 이유: MAE 의 최적 예측은 조건부 '중앙값' 이고,
+  우편향 분포에서 중앙값은 평균보다 최빈값에 가깝다. FICR 은 오차 6%/8% 계단함수라
+  평균 정확도가 아니라 최빈 정확도를 보상한다. 가중도 같은 방향으로 작동한다
+  (발전량 큰 행이 FICR earned 의 분모·분자를 지배).
+
+  [경고 — 후처리와 겹친다. 흡수율 79%]
+    A raw 0.5950 -> nested 후처리 0.6169  (+0.0219)
+    D raw 0.6205 -> nested 후처리 0.6224  (+0.0019)
+    후처리 후 D-A = +0.0055. raw 차이 +0.0260 의 21% 만 남는다.
+  이는 D 가 나빠서가 아니라 모델이 후처리가 하던 일(밴드 몰아넣기)을 스스로 하기 시작해
+  후처리가 할 일이 없어진 것이다. 실제로 D 의 raw FICR 0.3762 는 A 의 '후처리 후'
+  FICR 0.3759 와 같다. 누적 흡수 관측: 정제타깃 51% / 배치1 80% / D(v13) 84% /
+  G(v13) 91% / v14 79%.
+
+  [후처리 리스크 — 다음 실험 후보]
+  D 에서 후처리는 1-NMAE 0.8649 -> 0.8589 (-0.0060) 를 내주고 FICR +0.0097 을 얻어
+  순 +0.0019 다. 2년으로 적합해 1년에 적용하는 절차인데 순이득이 이 정도면
+  적합 분산이 이득을 넘길 수 있다. v14 는 piecewise 유지로 제출하되,
+  '후처리 없음' 과 'linear(alpha only)' 를 별도로 재봐야 한다.
+
+  [기대 LB]
+  v13 전례: raw +0.0058 / nested +0.0005 / 실제 LB +0.0046 (raw 쪽이 더 잘 맞았다).
+  v14 는 raw +0.0260 / nested +0.0055. raw 를 그대로 믿으면 1등권인데 그건 비현실적이다.
+  nested 기준 +0.005 ~ +0.010 을 기대치로 잡고, 이 범위를 벗어나는 결과가 나오면
+  '후처리 흡수율을 LB 예측에 어떻게 쓸 것인가' 자체를 §3.6 에 다시 써야 한다.

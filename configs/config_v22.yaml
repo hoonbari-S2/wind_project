@@ -1,0 +1,95 @@
+# configs/config_v22.yaml
+# v13 대비 변경: **max_depth 6 -> 8 한 가지뿐.** 그 외 전부 동일.
+# ⚠ 이것은 점수 후보가 아니라 **진단**임 — "모델이 표현력 한계에 걸려 있는가" 를 90초에 답한다.
+version: v22
+seed: 42
+n_splits: 5
+
+targets: [kpx_group_1, kpx_group_2, kpx_group_3]
+capacity_kwh:
+  kpx_group_1: 21600
+  kpx_group_2: 21600
+  kpx_group_3: 21000
+
+data_paths:
+  train_dir: ./train
+  test_dir: ./test
+  save_model_dir: ./saved_models/v22
+  submission_dir: ./submissions
+
+model_type: XGBoost
+
+model_params:
+  objective: "reg:tweedie"
+  tweedie_variance_power: 1.5
+  eval_metric: "tweedie-nloglik@1.5"
+  tree_method: "hist"
+  device: "cuda:0"
+  n_estimators: 1000
+  learning_rate: 0.03
+  max_depth: 8            # <-- v13 은 6. 이 한 줄이 유일한 변경
+  subsample: 0.8
+  colsample_bytree: 0.8
+  random_state: 42
+  early_stopping_rounds: 30
+
+early_stopping_rounds: 30
+
+run_args: >-
+  --clean-target --joint-groups kpx_group_1,kpx_group_3
+  --featcols-from ./saved_models/v13
+  --baseline-oof ./saved_models/v13/oof_preds.csv
+
+features_summary: >-
+  피처는 v13 과 완전히 동일 (--featcols-from 으로 폴드별 200개 고정).
+  선택 절차까지 상수이므로 v13 과의 차이는 정의상 max_depth 하나뿐임 (§3.32).
+
+notes: >-
+  v22: max_depth 상향 — **진단 목적**. §6 후보 4, §8.4 의 명시적 예외.
+
+  [왜 지금 이걸 묻는가 — 다음 실험의 전제를 먼저 확인함 (§3.17)]
+  §6 후보 중 기대치 1위는 타깃 인코딩(hour×month×group)임. 그런데 그것이 주는 것은
+  '새 정보' 가 아니라 **'깊이 6으로는 만들 수 없는 고차 상호작용'** 임 —
+  모델은 이미 hour·month 컬럼을 갖고 있어 원리적으로 셀 평균을 스스로 만들 수 있고,
+  못 만든다면 그 이유는 용량 제약이기 때문임. `max_depth: 6` 은 한 트리가 최대 2^6=64칸까지만
+  쪼갤 수 있는데 hour×month 는 288칸임.
+  => **타깃 인코딩의 기대치는 전적으로 "표현력이 병목이다" 라는 전제에 달려 있음.**
+  그 전제를 코드 0줄·학습 1회로 직접 시험함. v21 은 전제 확인을 먼저 해서 설계를 고쳤고,
+  §3.33 이 그 습관의 값어치를 보여줬음.
+
+  [분류 — 왜 '진단' 이라고 못박는가]
+  max_depth 상향은 §3.30 규칙 ② 의 (a) 정보형도 (b) LB 계측기도 아님.
+  따라서 **게이트를 통과해도 이것만으로는 제출하지 않음.** §8.4 는 HPO 를 전부 폐기했고
+  max_depth 상향만 "규제가 아니라 표현력" 이라는 이유로 예외로 남겨 두었는데,
+  그 예외의 목적은 점수가 아니라 **진단**임. 전이율 계급도 미상(정규화형 26% 는 하향 기준).
+
+  [설계 — 유일 변수]
+  --featcols-from ./saved_models/v13 로 폴드별 피처를 v13 의 200개로 고정함.
+  깊이는 top-K 선택용 1차 모델(m0)에도 영향을 주므로, 고정하지 않으면 §3.32 가 측정한
+  선택 재추첨(±0.005)이 섞여 들어감. --top-k 는 주지 않음.
+  ⚠ 정직한 주의: 실제로 깊이 8을 배포한다면 피처 선택도 깊이 8로 다시 할 것이므로,
+  이 구성은 '배포 구성' 이 아니라 '깊이의 순효과' 를 재는 구성임. 진단 목적에는 이쪽이 맞음.
+
+  [사전 등록 판정 — 결과 보기 전에 고정]
+  1. 게이트: raw OOF 연도짝비교 vs v13, §3.6 규칙 6 네 조건.
+  2. `[분기 A]` 게이트 통과(3/3 양수 ∧ |평균|>표준편차 ∧ 그룹 2+)
+     => **표현력이 병목임.** 타깃 인코딩 즉시 착수 (기대치 상향).
+        v22 자체의 제출은 별도 판단 — HPO 계열이라 전이율 미상이고 §3.30 규칙 ② 밖임.
+  3. `[분기 B]` 판별 불가(부호 갈림 또는 |평균| ≤ 표준편차)
+     => **병목이 아님.** 타깃 인코딩 기대치를 v21 수준으로 하향하고
+        §6 후보 2(정제 타깃 파라미터 스윕)로 선회함.
+  4. `[분기 C]` 3/3 음수 ∧ 비율 > 2
+     => 깊이 6 이 이미 과적합 경계임. **표현력 축 종결**, 하향은 시험하지 않음
+        (§3.5: 하향은 정규화형이고 전이율 26% 라 이득이 있어도 LB 로 안 감).
+  5. **깊이 8 하나만 시험함.** 7·9·10 스윕 금지 — 다중성 (§3.6, v20b·v21 사전등록 승계).
+  6. 부수 진단(판정 기준 아님): ES 트리 수. 용량이 커지면 더 빨리 수렴해 트리 수가
+     줄어야 정상임. 안 줄면 학습이 다른 이유로 막혀 있다는 뜻이므로 기록해 둠.
+     그룹별로는 G3 를 따로 봄 — 라벨이 2년뿐이라 깊이 상향의 과적합 위험이 가장 큼.
+
+  [실행]
+  python main/train.py --config configs/config_v22.yaml --clean-target
+      --joint-groups kpx_group_1,kpx_group_3
+      --featcols-from ./saved_models/v13
+      --baseline-oof ./saved_models/v13/oof_preds.csv
+
+  정상 출력 확인선: `🌿 폴드별 피처 실제 [200]개` (독립·통합 모두 200. wgrid/obs 없음)

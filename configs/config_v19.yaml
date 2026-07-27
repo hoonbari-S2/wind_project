@@ -1,0 +1,70 @@
+# configs/config_v19.yaml
+# v13 대비 변경: **후행 720h 이동평균 편차 피처 7개 추가** (src/features_anom.py). 그 외 전부 동일.
+version: v19
+seed: 42
+n_splits: 5
+
+targets: [kpx_group_1, kpx_group_2, kpx_group_3]
+capacity_kwh:
+  kpx_group_1: 21600
+  kpx_group_2: 21600
+  kpx_group_3: 21000
+
+data_paths:
+  train_dir: ./train
+  test_dir: ./test
+  save_model_dir: ./saved_models/v19
+  submission_dir: ./submissions
+
+model_type: XGBoost
+
+model_params:
+  objective: "reg:tweedie"
+  tweedie_variance_power: 1.5
+  eval_metric: "tweedie-nloglik@1.5"
+  tree_method: "hist"
+  device: "cuda:0"
+  n_estimators: 1000
+  learning_rate: 0.03
+  max_depth: 6
+  subsample: 0.8
+  colsample_bytree: 0.8
+  random_state: 42
+  early_stopping_rounds: 30
+
+early_stopping_rounds: 30
+
+run_args: >-
+  --clean-target --top-k 200 --joint-groups kpx_group_1,kpx_group_3
+  --anom-features --baseline-oof ./saved_models/v13/oof_preds.csv
+
+features_summary: >-
+  v13 구성 전부 동일 + 후행 720h(30일) 이동평균 편차 7개: anom720_{ldaps_r, gfs_r,
+  ldaps_u10, gfs_u100, ldaps_t2, ldaps_ws10, gfs_ws100}. 812 -> 819.
+
+notes: >-
+  v19: 드리프트의 표현 대응 — 절대값 대신 최근 체제 대비 편차. §3.31, step32.
+
+  [근거 사슬]
+  step31: 습도 +8%p/3년, U성분 전 고도 감소, 기온 상승 — 단조 공변량 드리프트 실재.
+  피처 제외 기각(이동이 수백 컬럼에 중복), v18 표본 가중 기각(데이터 양 > 최신성).
+  남은 대응 = 표현. anom720_x = x − 직전 720h 평균은 표류를 피처 자신이 빼므로,
+  트리가 배운 편차 문턱이 2025 의 밀린 분포에서도 뜻을 유지함.
+
+  [합법성 — §6]
+  후행 참조만 사용 (이전 블록은 전부 현재 행 예측기준시점 이전 공개). 추론 시 2025년
+  1월의 창은 학습 마지막 720h(anom_state.csv)로 채움 — 과거 자료. 검증: 경계 이어붙임
+  일치성 1e-14, 행순서 셔플 불변성 확인 완료.
+
+  [사전 등록 판정 — §3.30 체제]
+  1. 게이트: raw OOF 연도짝비교 vs v13, §3.6 규칙 6 전체
+     (부호 3/3 ∧ 양수 ∧ |평균|>표준편차 ∧ 그룹 2+). 정보형(표현 변경)이므로 정공 게이트.
+  2. §3.30 규칙 1: 게이트 통과는 제출의 필요조건일 뿐. 통과 시에도 v15 전례
+     (정보형 3/3 통과 후 LB −0.0010)를 명시하고 제출은 별도 판단.
+  3. 창 720h 하나만 시험. 격자 탐색 금지. 편차 컬럼 7개가 top-k 200 에서 기존 컬럼을
+     밀어낼 수 있음(§3.18 선택 변위) — 7개뿐이라 위험 제한적이나 게이트가 잡을 것.
+
+  [실행]
+  python main/train.py --config configs/config_v19.yaml --clean-target --top-k 200
+      --joint-groups kpx_group_1,kpx_group_3 --anom-features
+      --baseline-oof ./saved_models/v13/oof_preds.csv

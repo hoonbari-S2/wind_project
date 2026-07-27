@@ -1,4 +1,5 @@
 """
+scripts/step1_scada_check.py
 ==============================================================================
 SCADA 1단계 점검 스크립트.
 
@@ -22,10 +23,13 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from src.validation import quiet_warnings
 from src.scada import (ALIGN_MIN, load_scada, verify_alignment, to_hourly, fit_reference_curve,
                        availability_mask, refine_outage_cause, availability_from_status,
                        group_available_capacity, fit_loss_factor, clean_target,
                        detect_wd_offset, GROUP_TURBINES, CAPACITY_KWH, _cols)
+
+quiet_warnings()
 
 BAR = "=" * 74
 
@@ -167,6 +171,12 @@ def main():
         if c in tgt:
             print(f"  {g}_cf: 유효 {tgt[c].notna().sum():,}  평균 {tgt[c].mean():.4f}  "
                   f"제외(가용<50%) {tgt[c].isna().sum() - labels[g].isna().sum():,}행")
+
+    # 배치1 피처에서 쓸 경험 파워커브를 파일로 남긴다 (학습기간에서 적합한 정적 곡선)
+    for maker, (cc, rr) in {"vestas": cv, "unison": cu}.items():
+        pd.DataFrame({"ws": cc, "kwh_per_h": rr}).to_csv(
+            odir / f"power_curve_{maker}.csv", index=False, encoding="utf-8-sig")
+    print(f"  파워커브 저장: power_curve_vestas.csv / power_curve_unison.csv")
 
     avail.to_csv(odir / "available_capacity.csv", index=False, encoding="utf-8-sig")
     tgt.to_csv(odir / "clean_target.csv", index=False, encoding="utf-8-sig")
